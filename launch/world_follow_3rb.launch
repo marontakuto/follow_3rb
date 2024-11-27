@@ -22,7 +22,7 @@
 
   <!-- ワールドの指定 -->
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
-    <arg name="world_name" value="$(find turtlebot3_dqn)/goal_3rb/worlds/lab_4goal.world"/>
+    <arg name="world_name" value="$(find turtlebot3_dqn)/follow_3rb/worlds/lab_large_obstacle.world"/>
     <arg name="paused" value="false"/>
     <arg name="use_sim_time" value="true"/>
     <arg name="gui" value="true"/>
@@ -32,7 +32,7 @@
 
   <!-- ロボット0の設定 -->
   <group ns = "$(arg first_tb3)">
-    <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_dqn)/goal_3rb/urdf/turtlebot3_$(arg model)_blue.urdf.xacro" />
+    <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_dqn)/follow_3rb/urdf/turtlebot3_$(arg model)_green.urdf.xacro" />
 
     <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher" output="screen">
       <param name="publish_frequency" type="double" value="50.0" />
@@ -44,7 +44,7 @@
 
   <!-- ロボット1の設定 -->
   <group ns = "$(arg second_tb3)">
-    <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_dqn)/goal_3rb/urdf/turtlebot3_$(arg model)_blue.urdf.xacro" />
+    <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_dqn)/follow_3rb/urdf/turtlebot3_$(arg model)_blue.urdf.xacro" />
 
     <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher" output="screen">
       <param name="publish_frequency" type="double" value="50.0" />
@@ -56,7 +56,7 @@
 
   <!-- ロボット2の設定 -->
   <group ns = "$(arg third_tb3)">
-    <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_dqn)/goal_3rb/urdf/turtlebot3_$(arg model)_blue.urdf.xacro" />
+    <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_dqn)/follow_3rb/urdf/turtlebot3_$(arg model)_blue.urdf.xacro" />
 
     <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher" output="screen">
       <param name="publish_frequency" type="double" value="50.0" />

@@ -21,9 +21,8 @@ import ros_numpy
 
 class Env():
     def __init__(self, mode, robot_n, lidar_num, input_list, teleport, 
-                 r_collision, r_just, r_near, r_goal, r_cost, r_passive, 
-                 Target, mask_switch, display_image_normal, display_image_mask, 
-                 display_rb):
+                 r_collision, r_near, r_center, r_just, 
+                 Target, display_image_normal, display_image_count, display_rb):
         
         self.mode = mode
         self.robot_n = robot_n
@@ -37,19 +36,16 @@ class Env():
         self.pub_cmd_vel = rospy.Publisher('cmd_vel', Twist, queue_size=5)
         self.reset_proxy = rospy.ServiceProxy('gazebo/reset_simulation', Empty)
 
-        # カメラ画像のマスク処理
-        self.mask_switch = mask_switch
+        # カメラ画像の出力
         self.display_image_normal = display_image_normal
-        self.display_image_mask = display_image_mask
+        self.display_image_count = display_image_count
         self.display_rb = display_rb
 
         # Optunaで選択された報酬値
         self.r_collision = r_collision
-        self.r_just = r_just
         self.r_near = r_near
-        self.r_goal = r_goal
-        self.r_cost = r_cost
-        self.r_passive = r_passive
+        self.r_center = r_center
+        self.r_just = r_just
         self.Target = Target
 
         # LiDARについての設定
@@ -57,15 +53,21 @@ class Env():
         self.lidar_min = 0.12 # lidarの最小測距値[m]
         self.range_margin = self.lidar_min + 0.03 # 衝突として処理される距離[m] 0.02
 
-        # 初期のゴールの色
-        if self.robot_n == 0:
-            self.goal_color = 'purple'
-        elif self.robot_n == 1:
-            self.goal_color = 'green'
-        elif self.robot_n == 2:
-            self.goal_color = 'yellow'
-        
-        self.previous_goal = None
+    def get_clock(self):
+        if self.mode == 'sim':
+            data = None
+            while data is None:
+                try:
+                    data = rospy.wait_for_message('/clock', Clock, timeout=10)
+                except:
+                    time.sleep(2)
+                    print('clock waiting...')
+                    pass
+            secs = data.clock.secs
+            nsecs = data.clock.nsecs/10**9
+            return secs+nsecs
+        else:
+            return time.time()
 
     def get_lidar(self, retake=False): # lidar情報の取得
         if retake:
@@ -140,50 +142,62 @@ class Env():
 
         return self.img
     
+    def get_count(self, img, middle=False, middle2=False, middle3=False, left=False, right=False, all=False, side=False):
+        
+        # 色の範囲
+        outside_lower = np.array([0, 0, 0], dtype=np.uint8) # 黒
+        outside_upper = np.array([255, 255, 80], dtype=np.uint8)
+        inside_lower = np.array([0, 150, 90], dtype=np.uint8) # 橙
+        inside_upper = np.array([20, 255, 255], dtype=np.uint8) 
+        robot_blue_lower = np.array([85, 100, 50], dtype=np.uint8) # 青
+        robot_blue_upper = np.array([130, 255, 255], dtype=np.uint8)
+        robot_green_lower = np.array([55, 100, 60], dtype=np.uint8) # 緑
+        robot_green_upper = np.array([85, 255, 255], dtype=np.uint8)
+
+        # 注目領域の指定
+        if middle:
+            img = img[:, len(img[0])*4//9:len(img[0])*5//9]
+        if middle2:
+            img = img[:, len(img[0])*1//3:len(img[0])*2//3]
+        if middle3:
+            img = img[:, len(img[0])*1//5:len(img[0])*4//5]
+        if left:
+            img = img[:, 0:len(img[0])*1//9]
+        if right:
+            img = img[:, len(img[0])*8//9:len(img[0])*9//9]
+        if all:
+            img = img
+        if side:
+            img = np.hstack((img[:, :len(img[1])*1//5], img[:, len(img[1])*4//5:]))
+        
+        img_hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV) # HSVに変換
+
+        # マスク処理
+        outside = cv2.inRange(img_hsv, outside_lower, outside_upper)
+        inside = cv2.inRange(img_hsv, inside_lower, inside_upper)
+        robot_blue = cv2.inRange(img_hsv, robot_blue_lower, robot_blue_upper)
+        robot_green = cv2.inRange(img_hsv, robot_green_lower, robot_green_upper)
+
+        # 摘出した画素数を算出
+        outside_num = np.count_nonzero(outside)
+        inside_num = np.count_nonzero(inside)
+        robot_blue_num = np.count_nonzero(robot_blue)
+        robot_green_num = np.count_nonzero(robot_green)
+
+        # 注目領域の出力
+        if self.display_image_count and self.robot_n in self.display_rb:
+            self.display_image(img, f'camera_count_{self.robot_n}')
+        
+        return outside_num, inside_num, robot_blue_num, robot_green_num
+    
     def getState(self): # 情報取得
 
         collision = False
-        goal = False
         state_list = [] # 入力する情報を格納するリスト
 
         ### 画像の取得と処理 ###
         img = self.get_camera() # カメラ画像の取得
-        img, goal_num = self.goal_mask(img) # 目標ゴールを緑に, 他のゴールを黒に変換 + ゴールの画素数取得
 
-        if goal_num > 300:
-            goal = True
-
-            # 1step前もゴールだった場合は前回と同じ画像を読み込んでいる可能性があるため再度画像取得する
-            if self.previous_goal:
-                while goal_num > 300:
-                    img = self.get_camera(retake=True)
-                    img, goal_num = self.goal_mask(img)
-                goal = False
-
-            # 目標のゴールを反対側のゴールに設定
-            if goal and not self.teleport:
-                if self.goal_color == 'red':
-                    self.goal_color = 'green'
-                elif self.goal_color == 'green':
-                    self.goal_color = 'red'
-                elif self.goal_color == 'yellow':
-                    self.goal_color = 'purple'
-                elif self.goal_color == 'purple':
-                    self.goal_color = 'yellow'
-        
-        self.previous_goal = goal
-        
-        #### LiDAR情報の取得と処理 ###
-        scan = self.get_lidar() # LiDAR値の取得
-
-        if self.range_margin >= min(scan):
-            collision = True
-            if self.mode == 'real': # 実機実験におけるLiDARの飛び値の処理
-                scan_true = [element_cont for element_num, element_cont in enumerate(scan) if element_cont != 0]
-                if scan.count(0) >= 1 and self.range_margin < min(scan_true): # (飛び値が存在する)and(飛び値を除いた場合は衝突判定ではない)
-                    collision = False
-        
-        # 入力するカメラ画像の処理
         if ('cam' in self.input_list) or ('previous_cam' in self.input_list) or ('previous2_cam' in self.input_list):
             input_img = np.asarray(img, dtype=np.float32)
             input_img /= 255.0 # 画像の各ピクセルを255で割ることで0~1の値に正規化
@@ -205,6 +219,16 @@ class Env():
                         self.previous2_cam_list.popleft() # 左端の要素を削除(3step前の情報を削除)
                     past_cam = self.previous2_cam_list[0] # 2step前の画像
                     state_list = state_list + past_cam # [現在 1step前 2step前]
+        
+        #### LiDAR情報の取得と処理 ###
+        scan = self.get_lidar() # LiDAR値の取得
+
+        if self.range_margin >= min(scan):
+            collision = True
+            if self.mode == 'real': # 実機実験におけるLiDARの飛び値の処理
+                scan_true = [element_cont for element_num, element_cont in enumerate(scan) if element_cont != 0]
+                if scan.count(0) >= 1 and self.range_margin < min(scan_true): # (飛び値が存在する)and(飛び値を除いた場合は衝突判定ではない)
+                    collision = False
 
         # 入力するLiDAR値の処理
         if ('lidar' in self.input_list) or ('previous_lidar' in self.input_list) or ('previous2_lidar' in self.input_list):
@@ -228,41 +252,54 @@ class Env():
                     past_scan = self.previous2_lidar_list[0] # 2step前のLiDAR値
                     state_list = state_list + past_scan # [画像] + [現在 1step前 2step前]
         
-        return state_list, scan, input_scan, collision, goal, goal_num
+        return state_list, input_scan, collision
    
-    def setReward(self, scan, collision, goal, goal_num,  action):
+    def setReward(self, collision, action):
 
         reward = 0
         color_num = 0
         just_count = 0
-        color_num = goal_num
+        lidar_value_left = round(self.scan[round(len(self.scan)*1/4)], 3)
+        lidar_value_right = round(self.scan[round(len(self.scan)*3/4)], 3)
+        _, _, robot_blue_num, robot_green_num = self.get_count(self.img, middle3=True)
+        color_num = robot_blue_num + robot_green_num
 
         if self.Target == 'both' or self.Target == 'reward':
-            if goal:
-                reward += self.r_goal + self.r_cost
-                just_count = 1
-            elif collision:
+            if collision:
                 reward -= self.r_collision
-            if action in [3, 4]:
-                reward -= self.r_passive
-            reward -= self.r_cost
-            reward += goal_num * self.r_just
-            reward -= min(1 / (min(scan) + 0.01), 7) * self.r_near
+
+            if self.robot_n == 0: # robot0
+                if abs(lidar_value_left - lidar_value_right) <= 0.04 and action == 1:
+                    reward += self.r_center
+            
+            elif self.robot_n != 0: # robot1, 2
+                if abs(lidar_value_left - lidar_value_right) <= 0.04:
+                    reward += self.r_center
+                if (130>= robot_blue_num >=30) or (130 >= robot_green_num >=30):
+                    reward += self.r_just
+                    just_count = 1
+                if (robot_green_num or robot_blue_num) > 130:
+                    reward -= self.r_near
         else:
-            if goal:
-                reward += 50 + 10 # r_goal + r_cost
-                just_count = 1
-            elif collision:
+            if collision:
                 reward -= 50 # r_collision
-            if action in [3, 4]:
-                reward -= 50 # r_passive
-            reward -= 10 # r_cost
-            reward += goal_num * 1 # r_just
-            reward -= min(1 / (min(scan) + 0.01), 7) * 1 # r_near
+
+            if self.robot_n == 0: # robot0
+                if abs(lidar_value_left - lidar_value_right) <= 0.04 and action == 1:
+                    reward += 10 # r_center
+            
+            elif self.robot_n != 0: # robot1, 2
+                if abs(lidar_value_left - lidar_value_right) <= 0.04:
+                    reward += 10 # r_center
+                if (130>= robot_blue_num >=30) or (130 >= robot_green_num >=30):
+                    reward += 100 # r_just
+                    just_count = 1
+                if (robot_green_num or robot_blue_num) > 130:
+                    reward -= 10 # r_near
         
         return reward, color_num, just_count
 
-    def step(self, action, test): # 1stepの行動
+    def step(self, action, test): # 1stepの処理
 
         self.img = None
         self.scan = None
@@ -274,65 +311,193 @@ class Env():
         "行動時間は行動を決定してから次の行動が決まるまでであるため1秒もない"
 
         if action == 0: # 左折
-            vel_cmd.linear.x = 0.15 # 直進方向[m/s]
-            vel_cmd.angular.z = 1.57 # 回転方向 [rad/s]
+            vel_cmd.linear.x = 0.17 # 直進方向[m/s]
+            vel_cmd.angular.z = 0.78 # 回転方向 [rad/s]
         
-        elif action == 1: # 直進
-            vel_cmd.linear.x = 0.10
+        elif action == 1: # 高速直進
+            vel_cmd.linear.x = 0.17
             vel_cmd.angular.z = 0
 
         elif action == 2: # 右折
-            vel_cmd.linear.x = 0.15
-            vel_cmd.angular.z = -1.57
+            vel_cmd.linear.x = 0.17
+            vel_cmd.angular.z = -0.78
         
-        elif action == 3: # 左旋回
-            vel_cmd.linear.x = 0
-            vel_cmd.angular.z = 1.57
+        elif action == 3: # 低速直進
+            vel_cmd.linear.x = 0.08
+            vel_cmd.angular.z = 0
         
-        elif action == 4: # 右旋回
-            vel_cmd.linear.x = 0
-            vel_cmd.angular.z = -1.57
+        if self.robot_n == 0 and action != 3:
+            vel_cmd.linear.x = vel_cmd.linear.x * 0.7
+            vel_cmd.angular.z = vel_cmd.linear.x * 0.7
         
         self.pub_cmd_vel.publish(vel_cmd) # 実行
-        state_list, scan, input_scan, collision, goal, goal_num = self.getState() # 状態観測
-        reward, color_num, just_count = self.setReward(scan, collision, goal, goal_num, action) # 報酬計算
+        state_list, input_scan, collision = self.getState() # 状態観測
+        reward, color_num, just_count = self.setReward(collision, action) # 報酬計算
 
-        if not test: # テスト時でないときの処理
-            if (collision or goal) and not self.teleport:
-                self.restart() # 進行方向への向き直し
-            elif collision or goal:
+        if not test and collision: # テスト時でないとき衝突した場合の処理
+            if self.teleport:
                 self.relocation() # 空いているエリアへの再配置
+            else:
+                self.restart() # 進行方向への向き直し
         
-        return np.array(state_list), reward, color_num, just_count, collision, goal, input_scan
+        return np.array(state_list), reward, color_num, just_count, collision, input_scan
 
     def reset(self):
         self.img = None
         self.scan = None
-        state_list, _, _, _, _, _ = self.getState()
+        state_list, _, _ = self.getState()
         return np.array(state_list)
     
-    def restart(self): # 障害物から離れるように動いて安全を確保
+    def restart2(self):
+        
+        vel_cmd = Twist()
+        self.stop()
+       
+        while True:
+            data_range = self.get_lidar(retake=True)
+            while True: # 正面を向くまで
+                
+                vel_cmd.linear.x = 0
+                vel_cmd.angular.z = pi/3
+                self.pub_cmd_vel.publish(vel_cmd) #実行
+                data_range = self.get_lidar(retake=True)
+                
+                if data_range.index(min(data_range)) == 0:
+                   wall = 'front'
+                   break
+                elif data_range.index(min(data_range)) == round(len(data_range)//2):
+                   wall = 'back'
+                   break
+            
+            self.stop()
+            
+            if wall == 'front':
+                start_time = self.get_clock()
+                while self.get_clock() - start_time < 1.2:
+                    vel_cmd.linear.x = -0.10
+                    vel_cmd.angular.z = 0
+                    self.pub_cmd_vel.publish(vel_cmd) #実行
+                    data_range = self.get_lidar(retake=True)
+
+            elif wall == 'back':
+                start_time = self.get_clock()
+                while self.get_clock() - start_time < 1.2:
+                    vel_cmd.linear.x = 0.10
+                    vel_cmd.angular.z = 0
+                    self.pub_cmd_vel.publish(vel_cmd) #実行
+                    data_range = self.get_lidar(retake=True)
+
+            side = 'none'
+            img = self.get_camera(retake=True)
+            outside_num, inside_num, robot_blue_num, robot_green_num = self.get_count(img, middle2=True)
+            if robot_blue_num >= 8*15*0.5:
+                side = 'robot'
+            elif robot_green_num >= 8*15*0.5:
+                side = 'robot'
+            elif inside_num >= 8*15*0.5:
+                side = 'inside'
+            elif outside_num >= 8*15*0.5:
+                side = 'outside'
+
+            self.stop()
+           
+            while True:
+                if side == 'robot':
+                    img = self.get_camera(retake=True)
+                    _,inside_num,_,_=self.get_count(img,middle=True)
+                    while inside_num < 15: #ロボット衝突後-pi/4で回転しているときのobstacle(オレンジ)のピクセルしきい値
+                        vel_cmd.linear.x = 0 #直進方向0m/s
+                        vel_cmd.angular.z =pi/3.7  #回転方向 rad/s  pi/4
+                        self.pub_cmd_vel.publish(vel_cmd) #実行
+                        img = self.get_camera(retake=True)
+                        _,inside_num,_,_=self.get_count(img,middle=True)
+
+                    start_time=self.get_clock()
+                    now = self.get_clock()
+                    while now-start_time < 1.0:
+                        vel_cmd.linear.x = 0 #直進方向0.15m/s
+                        vel_cmd.angular.z = pi/2  #回転方向 rad/s
+                        self.pub_cmd_vel.publish(vel_cmd) #実行
+                        now = self.get_clock()
+
+                    break
+
+                elif side =='inside':
+                    vel_cmd.linear.x = 0 #直進方向0m/s
+                    vel_cmd.angular.z =pi/2  #回転方向 rad/s
+                elif side == 'outside':
+                    img = self.get_camera(retake=True)
+                    _,inside_num,_,_=self.get_count(img,right=True)#middle
+                    while inside_num < 10: #ロボット衝突後-pi/4で回転しているときのobstacle(オレンジ)のピクセルしきい値
+                        vel_cmd.linear.x = 0 #直進方向0m/s
+                        vel_cmd.angular.z =-pi/3.7 #回転方向 rad/s   pi/4
+                        self.pub_cmd_vel.publish(vel_cmd) #実行
+                        img = self.get_camera(retake=True)
+                        _,inside_num,_,_=self.get_count(img,right=True)#middle
+                    break
+                else:
+                    break
+
+                start_time=self.get_clock()
+                now = self.get_clock()
+                while now-start_time < 1.2:
+                    self.pub_cmd_vel.publish(vel_cmd) #実行
+                    now = self.get_clock()
+                vel_cmd.linear.x = 0.0
+                vel_cmd.angular.z = 0.0
+                self.pub_cmd_vel.publish(vel_cmd)
+                break
+
+            self.stop()
+
+            data_range = self.get_lidar(retake=True)
+            img = self.get_camera(retake=True)
+            outside_num, inside_num, robot_blue_num, robot_green_num = self.get_count(img, all=True)
+            if min(data_range)>self.range_margin+0.02 and (50 > robot_blue_num and 50 > robot_green_num):#restart直後に衝突判定にならないように最低2cm余裕
+                break
+    
+    def restart(self): # 障害物から離れるように動いて進行方向へ向き直す
 
         self.stop()
         vel_cmd = Twist()
         front_side = list(range(0, self.lidar_num * 1 // 4 + 1)) + list(range(self.lidar_num * 3 // 4, self.lidar_num))
         left_side = list(range(0, self.lidar_num * 1 // 2 + 1))
+        threshold = 15 # 右手にオレンジがこの画素数だけ映れば動き直しを終了する
 
         data_range = self.get_lidar(retake=True)
 
         while True:
-            if data_range.index(min(data_range)) in left_side: # 左側に障害物がある時
-                vel_cmd.angular.z = -pi / 2 # 右回転[rad/s]
-            else:
-                vel_cmd.angular.z = pi / 2 # 左回転[rad/s]
+
+            # 衝突したものから離れる動き
+            while True:
+                if data_range.index(min(data_range)) in left_side: # 左側に障害物がある時
+                    vel_cmd.angular.z = -pi / 2 # 右回転[rad/s]
+                else:
+                    vel_cmd.angular.z = pi / 2 # 左回転[rad/s]
+                
+                if data_range.index(min(data_range)) in front_side: # 前方に障害物がある時
+                    vel_cmd.linear.x = -0.1 # 後退[m/s]
+                    vel_cmd.angular.z = vel_cmd.angular.z * -1 # 回転方向反転[rad/s]
+                else:
+                    vel_cmd.linear.x = 0.1 # 前進[m/s]
+                
+                self.pub_cmd_vel.publish(vel_cmd) # 実行
+
+                data_range = self.get_lidar(retake=True)
+
+                if min(data_range) > self.range_margin + 0.1: # LiDAR値が衝突判定の距離より余裕がある時
+                    self.stop()
+                    break
             
-            if data_range.index(min(data_range)) in front_side: # 前方に障害物がある時
-                vel_cmd.linear.x = -0.1 # 後退[m/s]
-                vel_cmd.angular.z = vel_cmd.angular.z * -1 # 回転方向反転[rad/s]
-            else:
-                vel_cmd.linear.x = 0.1 # 前進[m/s]
-            
-            self.pub_cmd_vel.publish(vel_cmd) # 実行
+            # 右手にオレンジの障害物がある状態になるまで回転させる
+            img = self.get_camera(retake=True)
+            _, inside_num, _, _ = self.get_count(img, right=True)
+            while inside_num < threshold:
+                vel_cmd.linear.x = 0
+                vel_cmd.angular.z = -pi/3
+                self.pub_cmd_vel.publish(vel_cmd)
+                img = self.get_camera(retake=True)
+                _, inside_num, _, _ = self.get_count(img, right=True)
 
             data_range = self.get_lidar(retake=True)
 
@@ -343,52 +508,18 @@ class Env():
     def set_robot(self, num): # 指定位置にロボットを配置
 
         self.stop()
-
-        # テスト時の目標ゴールの再設定
-        if 0 <= num <= 100:
-            if self.robot_n == 0:
-                self.goal_color = 'purple'
-            elif self.robot_n == 1:
-                self.goal_color = 'green'
-            elif self.robot_n == 2:
-                self.goal_color = 'yellow'
         
         # 配置場所の定義
-        a = [0.55, 0.9, 0.02, 3.14] # 上
-        b = [0.55, 0.35, 0.02, 2.355] # 右上
-        c = [0.0, 0.35, 0.02, 1.57] # 右
-        d = [-0.55, 0.35, 0.02, 0.785] # 右下
-        e = [-0.55, 0.9, 0.02, 0.0] # 下
-        f = [-0.55, 1.45, 0.02, -0.785] # 左下
-        g = [0.0, 1.45, 0.02, -1.57] # 左
-        h = [0.55, 1.45, 0.02, -2.355] # 左上
+        a = [0.55, 0.9, 0.02, -1.57]  # 上
+        b = [0.55, 0.35, 0.02, 3.14]  # 右上
+        c = [0.0, 0.35, 0.02, 3.14]   # 右
+        d = [-0.55, 0.35, 0.02, 1.57] # 右下
+        e = [-0.55, 0.9, 0.02, 1.57]  # 下
+        f = [-0.55, 1.45, 0.02, 0.0]  # 左下
+        g = [0.0, 1.45, 0.02, 0.0]    # 左
+        h = [0.55, 1.45, 0.02, -1.57] # 左上
 
         if num == 0: # 初期位置
-            if self.robot_n == 0:
-                XYZyaw = b
-            elif self.robot_n == 1:
-                XYZyaw = h
-            elif self.robot_n == 2:
-                XYZyaw = f
-        
-        # 以下テスト用
-        if num in [1, 2]:
-            if self.robot_n == 0:
-                XYZyaw = b
-            elif self.robot_n == 1:
-                XYZyaw = h
-            elif self.robot_n == 2:
-                XYZyaw = f
-        
-        elif num in [3, 4]:
-            if self.robot_n == 0:
-                XYZyaw = a
-            elif self.robot_n == 1:
-                XYZyaw = g
-            elif self.robot_n == 2:
-                XYZyaw = e
-        
-        elif num in [5, 6]:
             if self.robot_n == 0:
                 XYZyaw = c
             elif self.robot_n == 1:
@@ -396,12 +527,45 @@ class Env():
             elif self.robot_n == 2:
                 XYZyaw = g
         
+        # 以下テスト用
+        if num in [1, 2]:
+            if self.robot_n == 0:
+                XYZyaw = c
+            elif self.robot_n == 1:
+                XYZyaw = a
+            elif self.robot_n == 2:
+                XYZyaw = g
+        
+        elif num in [3, 4]:
+            if self.robot_n == 0:
+                XYZyaw = c
+            elif self.robot_n == 1:
+                XYZyaw = g
+            elif self.robot_n == 2:
+                XYZyaw = a
+        
+        elif num in [5, 6]:
+            if self.robot_n == 0:
+                XYZyaw = b
+            elif self.robot_n == 1:
+                XYZyaw = h
+            elif self.robot_n == 2:
+                XYZyaw = f
+        
+        elif num in [7, 8]:
+            if self.robot_n == 0:
+                XYZyaw = b
+            elif self.robot_n == 1:
+                XYZyaw = f
+            elif self.robot_n == 2:
+                XYZyaw = h
+        
         # フィールド外
         elif num == 102: # フィールド外の右側
             if self.robot_n == 0:
                 XYZyaw = [-0.55, -0.3, 0.02, 0] # 下
             elif self.robot_n == 1:
-                XYZyaw = [0.0, -0.3, 0.02, 3.14] # 中央
+                XYZyaw = [0.0, -0.3, 0.02, 0] # 中央
             elif self.robot_n == 2:
                 XYZyaw = [0.55, -0.3, 0.02, 0] # 上
         
@@ -409,7 +573,7 @@ class Env():
             if self.robot_n == 0:
                 XYZyaw = [0.55, 2.1, 0.02, 0] # 下
             elif self.robot_n == 1:
-                XYZyaw = [0.0, 2.1, 0.02, 3.14] # 中央
+                XYZyaw = [0.0, 2.1, 0.02, 0] # 中央
             elif self.robot_n == 2:
                 XYZyaw = [-0.55, 2.1, 0.02, 0] # 上
         
@@ -417,7 +581,7 @@ class Env():
             if self.robot_n == 0:
                 XYZyaw = [-1.2, 1.45, 0.02, 0] # 左
             elif self.robot_n == 1:
-                XYZyaw = [-1.2, 0.9, 0.02, 3.14] # 中央
+                XYZyaw = [-1.2, 0.9, 0.02, 0] # 中央
             elif self.robot_n == 2:
                 XYZyaw = [-1.2, 0.35, 0.02, 0] # 右
         
@@ -425,7 +589,7 @@ class Env():
             if self.robot_n == 0:
                 XYZyaw = [1.2, 0.35, 0.02, 0] # 右
             elif self.robot_n == 1:
-                XYZyaw = [1.2, 0.9, 0.02, 3.14] # 中央
+                XYZyaw = [1.2, 0.9, 0.02, 0] # 中央
             elif self.robot_n == 2:
                 XYZyaw = [1.2, 1.45, 0.02, 0] # 左
 
@@ -447,6 +611,12 @@ class Env():
         elif num == 1008:
             XYZyaw = h
         
+        # 配置前の画像取得(テスト限定)
+        if 1 <= num <= 100:
+            img_previous = self.get_camera(retake=True)
+            count_previous = list(self.get_count(img_previous, all=True))
+        
+        # 配置
         state_msg = ModelState()
         state_msg.model_name = 'tb3_{}'.format(self.robot_n)
         state_msg.pose.position.x = XYZyaw[0]
@@ -461,45 +631,14 @@ class Env():
         set_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
         set_state(state_msg)
 
-        if 0 <= num <= 100 or 1001 <= num <= 1100:
-            time.sleep(0.1) # 配置後すぐに行動させた場合は配置前の情報が使われることがあるため数秒待機
-
-    # 以降追加システム
-    def goal_mask(self, img): # 目標ゴールを緑に, 他のゴールを黒に変換
-
-        goal_num = 0
-
-        # 画像をHSV色空間に変換
-        img_hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
-        # 色範囲を定義(HSVの値)
-        color_ranges = {
-            "red": [(0, 50, 50), (10, 255, 255)], # 赤(低域)
-            "red2": [(170, 150, 90), (180, 255, 255)], # 赤(高域)
-            "green": [(50, 50, 50), (70, 255, 255)], # 緑
-            "yellow": [(20, 50, 50), (30, 255, 255)], # 黄
-            "purple": [(130, 50, 50), (160, 255, 255)] # 紫
-        }
-
-        # 色の変換
-        for color, (lower, upper) in color_ranges.items():
-            lower_bound = np.array(lower, dtype=np.uint8)
-            upper_bound = np.array(upper, dtype=np.uint8)
-            mask = cv2.inRange(img_hsv, lower_bound, upper_bound)
-            if color == self.goal_color or (self.goal_color == 'red' and color in ['red', 'red2']):
-                goal_num += cv2.countNonZero(mask)
-                changed_color = [0, 255, 0] # ゴールは緑色に変換
-            else:
-                changed_color = [0, 0, 0] # 他の色は黒に変換
-            if self.mask_switch:
-                img[mask > 0] = changed_color
-
-        # 画像の出力
-        if self.display_image_mask and self.robot_n in self.display_rb:
-            self.display_image(img, f'camera_mask_{self.robot_n}')
-        
-        return img, goal_num
+        # 配置後に取得される画像が更新されるまでループする(テスト限定)
+        while 1 <= num <= 100:
+            img_now = self.get_camera(retake=True)
+            count_now = list(self.get_count(img_now, all=True))
+            if count_previous != count_now:
+                break
     
+    # 以降追加システム
     def display_image(self, img, name): # カメラ画像の出力
 
         # アスペクト比を維持してリサイズ
@@ -577,21 +716,12 @@ class Env():
         # 空いているエリア
         empty_area = [x for x in list(range(8, 0, -1)) if x not in exist_erea]
 
-        if self.goal_color == 'red':
-            target_list = [4, 5, 3]
-        elif self.goal_color == 'green':
-            target_list = [8, 1, 7]
-        elif self.goal_color == 'yellow':
-            target_list = [6, 7, 5]
-        elif self.goal_color == 'purple':
-            target_list = [2, 3, 1]
-        
-        for value in target_list:
-            if value in empty_area:
-                teleport_area = value
-                break
-        if teleport_area == 0:
-            teleport_area = empty_area[0]
+        if self.robot_n == 0:
+            teleport_area = empty_area[-1]
+        elif self.robot_n == 1:
+            teleport_area = empty_area[-3]
+        elif self.robot_n == 2:
+            teleport_area = empty_area[-5]
         
         # テレポート
         self.set_robot(teleport_area + 1000)

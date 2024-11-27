@@ -172,8 +172,151 @@
 
       </link>
       <static>1</static>
-    </model>
+    </model>    
 
+
+    <!-- Largeobstacle -->
+    <model name='obstacle'>
+      <pose frame=''>0 0 0.13 0 -0 0</pose>
+      <link name='obstacle'>
+        <collision name='obstacle_1'>
+          <pose>0.0 0.9 0 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.41 0.265 0.26</size>
+            </box>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <bounce/>
+            <friction>
+              <ode/>
+            </friction>
+            <contact>
+              <ode/>
+            </contact>
+          </surface>
+        </collision>
+
+        <visual name='obstacle_1'>
+          <pose>0.0 0.9 0 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.41 0.265 0.26</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/Orange</name>
+            </script>
+          </material>
+        </visual>
+
+        <collision name='obstacle_2'>
+          <pose>0.0 0.9 0 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.265 0.41 0.26</size>
+            </box>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <bounce/>
+            <friction>
+              <ode/>
+            </friction>
+            <contact>
+              <ode/>
+            </contact>
+          </surface>
+        </collision>
+
+        <visual name='obstacle_2'>
+          <pose>0.0 0.9 0 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.265 0.41 0.26</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/Orange</name>
+            </script>
+          </material>
+        </visual>
+
+        <collision name='obstacle_3'>
+          <pose>0.0 0.9 0 0 0 -0.785</pose>
+          <geometry>
+            <box>
+              <size>0.475 0.1025 0.26</size>
+            </box>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <bounce/>
+            <friction>
+              <ode/>
+            </friction>
+            <contact>
+              <ode/>
+            </contact>
+          </surface>
+        </collision>
+
+        <visual name='obstacle_3'>
+          <pose>0.0 0.9 0 0 0 -0.785</pose>
+          <geometry>
+            <box>
+              <size>0.475 0.1025 0.26</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/Orange</name>
+            </script>
+          </material>
+        </visual>
+
+        <collision name='obstacle_4'>
+          <pose>0.0 0.9 0 0 0 0.785</pose>
+          <geometry>
+            <box>
+              <size>0.475 0.1025 0.26</size>
+            </box>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <bounce/>
+            <friction>
+              <ode/>
+            </friction>
+            <contact>
+              <ode/>
+            </contact>
+          </surface>
+        </collision>
+
+        <visual name='obstacle_4'>
+          <pose>0.0 0.9 0 0 0 0.785</pose>
+          <geometry>
+            <box>
+              <size>0.475 0.1025 0.26</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/Orange</name>
+            </script>
+          </material>
+        </visual>
+      </link>
+      <static>1</static>
+    </model>
 
 
     <model name='addwall'>
@@ -208,7 +351,7 @@
           <material>
             <script>
               <uri>file://media/materials/scripts/gazebo.material</uri>
-              <name>Gazebo/Red</name>
+              <name>Gazebo/Black</name>
             </script>
           </material>
         </visual>
@@ -242,7 +385,7 @@
           <material>
             <script>
               <uri>file://media/materials/scripts/gazebo.material</uri>
-              <name>Gazebo/Green</name>
+              <name>Gazebo/Black</name>
             </script>
           </material>
         </visual>
@@ -276,7 +419,7 @@
           <material>
             <script>
               <uri>file://media/materials/scripts/gazebo.material</uri>
-              <name>Gazebo/Yellow</name>
+              <name>Gazebo/Black</name>
             </script>
           </material>
         </visual>
@@ -310,7 +453,7 @@
           <material>
             <script>
               <uri>file://media/materials/scripts/gazebo.material</uri>
-              <name>Gazebo/Purple</name>
+              <name>Gazebo/Black</name>
             </script>
           </material>
         </visual>
@@ -319,8 +462,6 @@
       <static>1</static>
     </model>
     
-    
-
     <model name='sheet'>
       <pose frame=''>0 0.9 -0.049 0 -0 0</pose>
       <link name='sheet'>

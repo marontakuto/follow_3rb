@@ -17,9 +17,9 @@ import sqlite3
 import pfrl
 import torch
 # 使用自作ファイル
-from env_goal_3rb import Env # 環境ファイル
-import net_goal_3rb # ネットワーク
-import greedy_goal_3rb # 探索手法
+from env_follow_3rb import Env # 環境ファイル
+import net_follow_3rb # ネットワーク
+import greedy_follow_3rb # 探索手法
 
 class ReinforceAgent():
     def __init__(self, network, conv_num, mid_layer_num, mid_units1, mid_units2, 
@@ -58,7 +58,7 @@ class ReinforceAgent():
         ### 自ら作成した変数 ###
         self.mask_switch = True # 目標ゴールを緑に, 他のゴールを黒に変換
         self.display_image_normal = False # 加工していない画像の表示
-        self.display_image_mask = False # マスク処理した画像の表示
+        self.display_image_count = False # マスク処理した画像の表示
         self.display_rb = [2] # カメラ画像を出力するロボットの識別番号
         self.screen_list = [2] # 学習経過を出力するロボットの識別番号
         self.recovery = True # リカバリー方策を適用するか否か
@@ -103,12 +103,12 @@ class ReinforceAgent():
                     self.n_added_input += self.lidar_num
             
             if Target=='both' or Target=='network':
-                self.q_func = net_goal_3rb.Q_Func_Optuna(conv_num,mid_layer_num,mid_units1,
+                self.q_func = net_follow_3rb.Q_Func_Optuna(conv_num,mid_layer_num,mid_units1,
                     mid_units2,mid_units3,cnv_act,ful_act,
                     n_actions=self.action_size, n_input_channels=self.n_input_channels, 
                     n_added_input=self.n_added_input)
             else:
-                self.q_func = net_goal_3rb.Q_Func(n_actions=self.action_size, 
+                self.q_func = net_follow_3rb.Q_Func(n_actions=self.action_size, 
                 n_input_channels=self.n_input_channels, n_added_input=self.n_added_input)
         
         if self.net == 'DCNN':
@@ -127,12 +127,12 @@ class ReinforceAgent():
                     self.n_added_input += self.lidar_num
 
             if Target == 'both' or Target == 'network':
-                self.q_func = net_goal_3rb.Dueling_Q_Func_Optuna(
+                self.q_func = net_follow_3rb.Dueling_Q_Func_Optuna(
                     conv_num, mid_layer_num, mid_units1, mid_units2, mid_units3, cnv_act, ful_act,
                     n_actions=self.action_size, n_input_channels=self.n_input_channels, n_added_input=self.n_added_input
                 )
             else:
-                self.q_func = net_goal_3rb.Dueling_Q_Func(
+                self.q_func = net_follow_3rb.Dueling_Q_Func(
                     n_actions=self.action_size, n_input_channels=self.n_input_channels, n_added_input=self.n_added_input
                 )
 
@@ -153,11 +153,11 @@ class ReinforceAgent():
                     self.n_added_input += self.lidar_num
             
             if Target == 'both' or Target == 'network':
-                self.q_func = net_goal_3rb.MLP_Optuna(
+                self.q_func = net_follow_3rb.MLP_Optuna(
                     mid_layer_num, mid_units1, mid_units2, mid_units3, ful_act, 
                     n_actions=self.action_size, n_input=self.n_input, n_added_input=self.n_added_input)
             else:
-                self.q_func = net_goal_3rb.MLP(n_actions=self.action_size, n_input=self.n_input, n_added_input=self.n_added_input)
+                self.q_func = net_follow_3rb.MLP(n_actions=self.action_size, n_input=self.n_input, n_added_input=self.n_added_input)
 
         if optimizer == 'SGD':
             self.optimizer = torch.optim.SGD(self.q_func.parameters(), momentum=0)
@@ -183,7 +183,7 @@ class ReinforceAgent():
         self.batch_size = batch_size
 
         if self.exploration == 'd_egreedy': # εが減衰
-            self.explorer = greedy_goal_3rb.MyEpsilonGreedy(
+            self.explorer = greedy_follow_3rb.MyEpsilonGreedy(
                 start_epsilon = 0.1,
                 end_epsilon = 0.0,
                 decay_steps = self.episode*self.episode_step,
@@ -193,7 +193,7 @@ class ReinforceAgent():
                 action_size = self.action_size
             )
         elif self.exploration == 'c_egreedy': # εが一定
-            self.explorer = greedy_goal_3rb.MyConstantGreedy(
+            self.explorer = greedy_follow_3rb.MyConstantGreedy(
                 epsilon=0, # 0ならgreedy
                 random_action_func=lambda: np.random.randint(self.action_size),
                 # replay_start_size = 0, # 初期探索なし
@@ -264,7 +264,7 @@ class ReinforceAgent():
                     pass
                 #####################################
 
-                next_state, reward, color_num, just_count, collision, _, input_scan = env.step(action, test=False) # 行動、状態の観測、報酬の一連の処理
+                next_state, reward, color_num, just_count, collision, input_scan = env.step(action, test=False) # 行動、状態の観測、報酬の一連の処理
                 next_state = torch.from_numpy(next_state).float()
                 self.model.observe(next_state, reward, collision, reset=False) # モデルの更新
 
@@ -410,7 +410,7 @@ class ReinforceAgent():
                         pass
                     #####################################
 
-                    next_state, reward, color_num, just_count, collision, goal, input_scan = env.step(action, test=True)
+                    next_state, reward, color_num, just_count, collision, input_scan = env.step(action, test=True)
                     next_state = torch.from_numpy(next_state).float()
                     self.model.observe(next_state, reward, collision, reset=False)
 
@@ -419,9 +419,7 @@ class ReinforceAgent():
                     score += reward
                     state = next_state
 
-                    if goal:
-                        done = True
-                    elif collision:
+                    if collision:
                         collisions += 1
                         done = True
                     elif t == self.test_step:
@@ -540,7 +538,7 @@ class ReinforceAgent():
                         pass
                     #####################################
 
-                    next_state, reward, color_num, just_count, collision, goal, input_scan = env.step(action, test=False)
+                    next_state, reward, color_num, just_count, collision, input_scan = env.step(action, test=False)
                     next_state = torch.from_numpy(next_state).float()
                     self.model.observe(next_state, reward, collision, reset=False)
 
@@ -549,9 +547,7 @@ class ReinforceAgent():
                     score += reward
                     state = next_state
 
-                    if goal:
-                        pass
-                    elif collision:
+                    if collision:
                         collisions += 1
                         collision = False
                     
@@ -597,7 +593,7 @@ def get_value_by_name(name): # データベースの情報を適切な型に直�
 
 # メイン
 if __name__ == '__main__':
-    rospy.init_node('main_goal_3rb')
+    rospy.init_node('main_follow_3rb')
 
     training = True # 学習の有無
     evaluation = True # テストの有無
@@ -640,29 +636,31 @@ if __name__ == '__main__':
         optimizer = get_value_by_name('optimizer')
         batch_size = get_value_by_name('batch_size')
         r_collision = get_value_by_name('r_collision')
-        r_just = get_value_by_name('r_just')
         r_near = get_value_by_name('r_near')
-        r_goal = get_value_by_name('r_goal')
-        r_cost = get_value_by_name('r_cost')
-        r_passive = get_value_by_name('r_passive')
+        r_center = get_value_by_name('r_center')
+        r_just = get_value_by_name('r_just')
         Target = get_value_by_name('Target')
         trials = get_value_by_name('trials')
         trial_size = get_value_by_name('trial_size')
+
+        parameters = ['network', 'conv_num', 'mid_layer_num', 'mid_units1', 'mid_units2', 
+                  'mid_units3', 'cnv_act', 'ful_act', 'optimizer', 'batch_size', 
+                  'r_collision', 'r_near', 'r_center', 'r_just', 'Target', 'trials', 'trial_size']
 
         agent = ReinforceAgent(network, conv_num, mid_layer_num, mid_units1, mid_units2, 
                                mid_units3, cnv_act, ful_act, optimizer, batch_size, Target, 
                                trials)
 
         env = Env(agent.mode, agent.robot_n, agent.lidar_num, agent.input_list, 
-                  agent.teleport, r_collision, r_just, r_near, r_goal, r_cost, r_passive, 
-                  Target, agent.mask_switch, agent.display_image_normal, agent.display_image_mask, 
+                  agent.teleport, r_collision, r_near, r_center, r_just, 
+                  Target, agent.display_image_normal, agent.display_image_count, 
                   agent.display_rb)
 
         #########記録ファイル作成########################################################
         if training:
             # 学習ファイル
             f_train_file = os.path.dirname(os.path.realpath(__file__)) + '/score/'
-            f_train_name = f_train_file + str(agent.robot_n) + "_goal_3rb_" + str(Target) + "_" + dtstr + "_train.xlsx"
+            f_train_name = f_train_file + str(agent.robot_n) + "_follow_3rb_" + str(Target) + "_" + dtstr + "_train.xlsx"
             # ディレクトリがない場合、作成する
             if not os.path.exists(f_train_file):
                 os.makedirs(f_train_file)
@@ -677,7 +675,7 @@ if __name__ == '__main__':
         if evaluation:
             # テストファイル
             f_test_file =  os.path.dirname(os.path.realpath(__file__)) + '/score/'
-            f_test_name = f_test_file + str(agent.robot_n) + "_goal_3rb_" + str(Target) + "_" + dtstr + "_test.xlsx"
+            f_test_name = f_test_file + str(agent.robot_n) + "_follow_3rb_" + str(Target) + "_" + dtstr + "_test.xlsx"
             # ディレクトリがない場合、作成する
             if not os.path.exists(f_test_file):
                 os.makedirs(f_test_file)
@@ -692,7 +690,7 @@ if __name__ == '__main__':
 
             # 評価ファイル
             f_evaluate_file =  os.path.dirname(os.path.realpath(__file__)) + '/score/'
-            f_evaluate_name = f_evaluate_file + str(agent.robot_n) + "_goal_3rb_" + str(Target) + "_" + dtstr + "_evaluate.xlsx"
+            f_evaluate_name = f_evaluate_file + str(agent.robot_n) + "_follow_3rb_" + str(Target) + "_" + dtstr + "_evaluate.xlsx"
             # ディレクトリがない場合、作成する
             if not os.path.exists(f_evaluate_file):
                 os.makedirs(f_evaluate_file)
