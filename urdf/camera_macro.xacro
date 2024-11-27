@@ -1,0 +1,154 @@
+<?xml version="1.0"?>
+<robot name="dtw_robot" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <xacro:macro name="material_color" params="r g b a">
+    <material name="custom_color">
+      <color rgba="${r} ${g} ${b} ${a}" />
+    </material>
+  </xacro:macro>
+
+  <xacro:macro name="camera_macro" params="parent prefix xyz">
+
+    <joint name="${prefix}_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child  link="${prefix}_link"/>
+      <origin xyz="${xyz}" rpy="${radians(-90)} 0 ${radians(-90)}"/>
+    </joint>
+
+    <link name="${prefix}_link">
+      <visual>
+        <geometry>
+          <box size="0.1 0.025 0.015" />
+        </geometry>
+        <origin xyz="0 -0.03 -0.05" rpy="0 0 0 " />
+        <material name="custom_color">
+          <color rgba="1 0 0 1"/> <!-- 赤色 -->
+        </material>
+      </visual>
+
+    </link>
+    <gazebo reference="${prefix}_link">
+      <material>Gazebo/Black</material>
+
+      <sensor type="camera" name="${prefix}">
+        <update_rate>10.0</update_rate>
+        <camera name="${prefix}">
+          <pose>0 0 0 0 ${radians(-90)} ${radians(90)}</pose>
+          <!-- <pose>0 0 0 0 ${radians(-75)} ${radians(90)}</pose> -->
+          <!-- <horizontal_fov>1.3962634</horizontal_fov> -->
+          <horizontal_fov>2.0944</horizontal_fov>
+          <image>
+            <width>1920</width>
+            <height>1080</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.02</near>
+            <far>300</far>
+          </clip>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.007</stddev>
+          </noise>
+        </camera>
+        <plugin name="camera_controller" filename="libgazebo_ros_camera.so">
+          <alwaysOn>true</alwaysOn>
+          <updateRate>0.0</updateRate>
+          <cameraName>${prefix}</cameraName>
+          <imageTopicName>image_raw</imageTopicName>
+          <cameraInfoTopicName>camera_info</cameraInfoTopicName>
+          <frameName>${prefix}_link</frameName>
+          <hackBaseline>0.0</hackBaseline>
+          <distortionK1>0.0</distortionK1>
+          <distortionK2>0.0</distortionK2>
+          <distortionK3>0.0</distortionK3>
+          <distortionT1>0.0</distortionT1>
+          <distortionT2>0.0</distortionT2>
+        </plugin>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- prefix = stereo_camera -->
+  <xacro:macro name="stereo_camera_macro" params="parent prefix xyz">
+
+    <joint name="${prefix}_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child  link="${prefix}_frame"/>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+    </joint>
+
+    <link name="${prefix}_frame">
+      <visual>
+        <geometry>
+          <box size="0.03 0.06 0.03" />
+        </geometry>
+        <origin xyz="0 0 0" rpy="0 0 0 " />
+        <material name="custom_color">
+          <color rgba="1 0 0 1"/> <!-- 赤色 -->
+        </material>
+      </visual>
+    </link>
+    <gazebo reference="${prefix}_frame">
+      <material>Gazebo/Red</material>
+
+      <sensor type="multicamera" name="${prefix}">
+        <update_rate>30.0</update_rate>
+
+        <camera name="left">
+          <pose>0 0.035 0 0 0 0</pose>
+          <horizontal_fov>1.3962634</horizontal_fov>
+          <image>
+            <width>800</width>
+            <height>800</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.02</near>
+            <far>300</far>
+          </clip>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.007</stddev>
+          </noise>
+        </camera>
+        <camera name="right">
+          <pose>0 -0.035 0 0 0 0</pose>
+          <horizontal_fov>1.3962634</horizontal_fov>
+          <image>
+            <width>800</width>
+            <height>800</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.02</near>
+            <far>300</far>
+          </clip>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.007</stddev>
+          </noise>
+        </camera>
+
+        <plugin name="stereo_camera_controller" filename="libgazebo_ros_multicamera.so">
+          <alwaysOn>true</alwaysOn>
+          <updateRate>0.0</updateRate>
+          <cameraName>${prefix}</cameraName>
+          <imageTopicName>image_raw</imageTopicName>
+          <cameraInfoTopicName>camera_info</cameraInfoTopicName>
+          <frameName>${prefix}_optical_frame</frameName>
+          <!--<rightFrameName>right_camera_optical_frame</rightFrameName>-->
+          <hackBaseline>0.07</hackBaseline>
+          <distortionK1>0.0</distortionK1>
+          <distortionK2>0.0</distortionK2>
+          <distortionK3>0.0</distortionK3>
+          <distortionT1>0.0</distortionT1>
+          <distortionT2>0.0</distortionT2>
+        </plugin>
+      </sensor>
+    </gazebo>
+  </xacro:macro> 
+</robot>

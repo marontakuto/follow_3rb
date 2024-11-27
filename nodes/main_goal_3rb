@@ -1,0 +1,748 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+""" それぞれがDQNを保有する群ロボットの回避行動の獲得 """
+
+import rospy
+import os
+import numpy as np
+import pandas as pd
+import time
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
+from datetime import datetime
+import torch.nn.functional as F # 活性化関数
+import sqlite3
+# 強化学習ライブラリ
+import pfrl
+import torch
+# 使用自作ファイル
+from env_goal_3rb import Env # 環境ファイル
+import net_goal_3rb # ネットワーク
+import greedy_goal_3rb # 探索手法
+
+class ReinforceAgent():
+    def __init__(self, network, conv_num, mid_layer_num, mid_units1, mid_units2, 
+                 mid_units3, cnv_act, ful_act, optimizer, batch_size, Target, trials):
+
+        # モデルを保存するためのパス
+        self.current_dirPath = os.path.dirname(os.path.realpath(__file__)) # カレントディレクトリのパス
+        self.dirPath = self.current_dirPath.replace('/nodes', '/save_model') # /nodes の部分を /save_model に置き換える
+        self.dirPath2 = self.current_dirPath.replace('/nodes', '/save_model/test_model')
+
+        ########変更パラメータ#################################################################
+        self.mode = 'sim' # sim or real
+        self.choice_model = False # dirPath/load_model/robot_n でテスト
+
+        self.save_model = False # 重みとリプレイバッファを保存するか
+        self.save_episode = 5 # (↑True時)重み保存を開始するエピソード
+        self.load_model = False # 保存した重みを適用するか
+        self.load_episode = 1 # (↑True時)適用する保存済重みのエピソード
+        self.load_rbuf = False
+
+        self.input_list = ['lidar', 'cam', 'previous_lidar', 'previous_cam', 'previous2_lidar', 'previous2_cam'] # 'lidar', 'cam', 'previous_cam', 'previous_lidar', 'previous2_lidar', 'previous2_cam'
+        self.net = network
+        self.exploration = 'd_egreedy' # d_egreedy(decay_epsilon_greedy) or c_egreedy(constant_epsilon_greedy)
+        self.lidar_num = 36 # DQNに入力するlidarの方向数
+        self.action_size = 5 # 行動の種類数
+        self.episode = 40 # 40
+        self.eval_episode = 6 # 6
+        self.episode_step = 500 # 500
+        self.test_step = 200 # 200
+        self.target_update = 500 # 500
+        self.multistep = 2
+        self.discount_factor = 0.9 # 割引率 0.9
+        self.replay_start_size = 500 # 初期探索 500
+        self.gpu = 0 # ON:0, OFF:-1
+
+        ### 自ら作成した変数 ###
+        self.mask_switch = True # 目標ゴールを緑に, 他のゴールを黒に変換
+        self.display_image_normal = False # 加工していない画像の表示
+        self.display_image_mask = False # マスク処理した画像の表示
+        self.display_rb = [2] # カメラ画像を出力するロボットの識別番号
+        self.screen_list = [2] # 学習経過を出力するロボットの識別番号
+        self.recovery = True # リカバリー方策を適用するか否か
+        self.teleport = True # 衝突時は空いたスペースに再配置する
+        self.termination_e = 999 # ロボットがフィールド外の左側に存在したら強制終了を始めるエピソード(最初のエピソードから行っていると無駄な計算量が出る)
+        self.trial_restart = 999 # Optunaをロードして始めるトライアル
+        self.all_episode_test = True # すべてのエピソードをテスト
+        self.synchro = True # エピソードごとの同期の有無
+        if self.all_episode_test: # すべてのエピソードをテストする場合は必ず同期する
+            self.synchro = True
+        ########################
+
+        ### オプション有無の実験 ###
+        # if trials >= 5:
+        #     self.mask_switch = False
+        ############################
+
+        #######################################################################################
+
+        # ロボットの番号割振り
+        self.robot_n = rospy.get_param('robot_num') # 0~3:multi, 99:solo
+        if self.robot_n == 99: # solo
+            self.robot_n = 1
+        
+        if self.gpu == 0: # GPU設定
+            torch.set_default_dtype(torch.float32)
+            torch.set_default_device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        if self.net == 'CNN':
+            self.n_added_input = 0
+            self.n_input_channels = 3
+            assert ('cam'in self.input_list) or ('previous_cam'in self.input_list) or ('previous2_cam'in self.input_list), 'cam not in input_list' 
+            if 'previous_cam' in self.input_list:
+                self.n_input_channels += 3
+            if 'previous2_cam' in self.input_list:
+                self.n_input_channels += 3
+            if ('lidar'in self.input_list) or ('previous_lidar'in self.input_list) or ('previous2_lidar'in self.input_list):
+                self.n_added_input += self.lidar_num
+                if 'previous_lidar' in self.input_list:
+                    self.n_added_input += self.lidar_num
+                if 'previous2_lidar' in self.input_list:
+                    self.n_added_input += self.lidar_num
+            
+            if Target=='both' or Target=='network':
+                self.q_func = net_goal_3rb.Q_Func_Optuna(conv_num,mid_layer_num,mid_units1,
+                    mid_units2,mid_units3,cnv_act,ful_act,
+                    n_actions=self.action_size, n_input_channels=self.n_input_channels, 
+                    n_added_input=self.n_added_input)
+            else:
+                self.q_func = net_goal_3rb.Q_Func(n_actions=self.action_size, 
+                n_input_channels=self.n_input_channels, n_added_input=self.n_added_input)
+        
+        if self.net == 'DCNN':
+            self.n_added_input = 0
+            self.n_input_channels = 3
+            assert ('cam'in self.input_list) or ('previous_cam'in self.input_list) or ('previous2_cam'in self.input_list), 'cam not in input_list' 
+            if 'previous_cam' in self.input_list:
+                self.n_input_channels += 3
+            if 'previous2_cam' in self.input_list:
+                self.n_input_channels += 3
+            if ('lidar'in self.input_list) or ('previous_lidar'in self.input_list) or ('previous2_lidar'in self.input_list):
+                self.n_added_input += self.lidar_num
+                if 'previous_lidar' in self.input_list:
+                    self.n_added_input += self.lidar_num
+                if 'previous2_lidar' in self.input_list:
+                    self.n_added_input += self.lidar_num
+
+            if Target == 'both' or Target == 'network':
+                self.q_func = net_goal_3rb.Dueling_Q_Func_Optuna(
+                    conv_num, mid_layer_num, mid_units1, mid_units2, mid_units3, cnv_act, ful_act,
+                    n_actions=self.action_size, n_input_channels=self.n_input_channels, n_added_input=self.n_added_input
+                )
+            else:
+                self.q_func = net_goal_3rb.Dueling_Q_Func(
+                    n_actions=self.action_size, n_input_channels=self.n_input_channels, n_added_input=self.n_added_input
+                )
+
+        if self.net == 'MLP':
+            self.n_input = 0
+            self.n_added_input = 0
+            if ('cam'in self.input_list) or ('previous_cam'in self.input_list):
+                self.n_input = 1296*3
+                if 'previous_cam' in self.input_list:
+                    self.n_input += 1296*3
+                if 'previous2_cam' in self.input_list:
+                    self.n_input += 1296*3
+            if ('lidar'in self.input_list) or ('previous_lidar'in self.input_list):
+                self.n_added_input += self.lidar_num
+                if 'previous_lidar' in self.input_list:
+                    self.n_added_input += self.lidar_num
+                if 'previous2_lidar' in self.input_list:
+                    self.n_added_input += self.lidar_num
+            
+            if Target == 'both' or Target == 'network':
+                self.q_func = net_goal_3rb.MLP_Optuna(
+                    mid_layer_num, mid_units1, mid_units2, mid_units3, ful_act, 
+                    n_actions=self.action_size, n_input=self.n_input, n_added_input=self.n_added_input)
+            else:
+                self.q_func = net_goal_3rb.MLP(n_actions=self.action_size, n_input=self.n_input, n_added_input=self.n_added_input)
+
+        if optimizer == 'SGD':
+            self.optimizer = torch.optim.SGD(self.q_func.parameters(), momentum=0)
+        elif optimizer == 'MomentumSGD':
+            self.optimizer = torch.optim.SGD(self.q_func.parameters(), momentum=0.9)
+        elif optimizer == 'Adagrad':
+            self.optimizer = torch.optim.Adagrad(self.q_func.parameters())
+        elif optimizer == 'RMSprop':
+            self.optimizer = torch.optim.RMSprop(self.q_func.parameters())
+        elif optimizer == 'Adadelta':
+            self.optimizer = torch.optim.Adadelta(self.q_func.parameters())
+        elif optimizer == 'Adam':
+            self.optimizer = torch.optim.Adam(self.q_func.parameters())
+        elif optimizer == 'AdamW':
+            self.optimizer = torch.optim.AdamW(self.q_func.parameters(), lr=0.005)
+        elif optimizer == 'SparseAdam':
+            self.optimizer = torch.optim.SparseAdam(self.q_func.parameters())
+        elif optimizer == 'Adamax':
+            self.optimizer = torch.optim.Adamax(self.q_func.parameters())
+        elif optimizer == 'RAdam':
+            self.optimizer = torch.optim.RAdam(self.q_func.parameters())
+        
+        self.batch_size = batch_size
+
+        if self.exploration == 'd_egreedy': # εが減衰
+            self.explorer = greedy_goal_3rb.MyEpsilonGreedy(
+                start_epsilon = 0.1,
+                end_epsilon = 0.0,
+                decay_steps = self.episode*self.episode_step,
+                random_action_func=lambda: np.random.randint(self.action_size),
+                # replay_start_size = 0, # 初期探索なし
+                replay_start_size = self.replay_start_size, # 初期探索あり
+                action_size = self.action_size
+            )
+        elif self.exploration == 'c_egreedy': # εが一定
+            self.explorer = greedy_goal_3rb.MyConstantGreedy(
+                epsilon=0, # 0ならgreedy
+                random_action_func=lambda: np.random.randint(self.action_size),
+                # replay_start_size = 0, # 初期探索なし
+                replay_start_size = self.replay_start_size, # 初期探索あり
+                action_size = self.action_size
+            )
+            
+        self.rbuf = pfrl.replay_buffers.ReplayBuffer(capacity=10 ** 5, num_steps=self.multistep)
+
+        self.model = pfrl.agents.DoubleDQN(
+            self.q_func, optimizer=self.optimizer, replay_buffer=self.rbuf, 
+            gamma=self.discount_factor, explorer=self.explorer, 
+            gpu=self.gpu, replay_start_size=self.replay_start_size, 
+            minibatch_size=self.batch_size, update_interval=1, 
+            target_update_interval=self.target_update, n_times_update=1
+        )
+
+    # Excelファイルへの追記
+    def excel(self, data, columns, file_name):
+        data = pd.DataFrame(data, columns=columns)
+        df = pd.read_excel(file_name)
+        df = pd.concat([df, data], ignore_index=True)
+        df.to_excel(file_name, index=False)
+
+    # 学習
+    def train(self):
+
+        # 使用するモデルのロード
+        if self.load_model:
+            self.model.load(self.dirPath + '/load_model/robot_' + str(self.robot_n))
+        if self.load_rbuf:
+            self.rbuf.load(self.dirPath + '/load_model/robot_' + str(self.robot_n) + '/replay_buffer')
+        
+        start_time = time.time() # 学習開始時間の取得
+
+        if self.mode == 'sim':
+            env.set_robot(0) # 初期位置に配置
+
+        if self.robot_n in self.screen_list:
+            print('start train (robot' + str(self.robot_n) + ')')
+        
+        old_score = []
+        old_collisions = []
+        r_just_list = []
+        color_list = []
+
+        collision = False
+        termination = False
+
+        for e in range(1, self.episode + 1):
+
+            state = env.reset()
+            state = torch.from_numpy(state).float()
+
+            score = 0
+            collisions = 0
+            color_count = 0
+            r_just_count = 0
+
+            for t in range(1, self.episode_step + 1):
+                
+                action = self.model.act(state) # モデルに状態を渡して取るべき行動を算出
+
+                ##### shielding(リカバリー方策) #####
+                if self.recovery and t >= 2:
+                    if color_num < 100:
+                        action = env.recovery_change_action(e, input_scan, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
+                    pass
+                #####################################
+
+                next_state, reward, color_num, just_count, collision, _, input_scan = env.step(action, test=False) # 行動、状態の観測、報酬の一連の処理
+                next_state = torch.from_numpy(next_state).float()
+                self.model.observe(next_state, reward, collision, reset=False) # モデルの更新
+
+                r_just_count += just_count
+                color_count += color_num
+                score += reward
+                state = next_state
+
+                # 衝突時の処理
+                if collision:
+                    collisions += 1
+                    collision = False
+                
+                # エピソードの最後の処理
+                if t == self.episode_step:
+
+                    # 秒、分、時間の取得
+                    m, s = divmod(int(time.time() - start_time), 60)
+                    h, m = divmod(m, 60)
+
+                    # 結果の出力
+                    if self.robot_n in self.screen_list:
+                        print('Ep: {} score: {:.2f} collision: {} goal: {} time: {}:{:02d}:{:02d}'.format(
+                              e, score, collisions, r_just_count, h, m, s))
+
+                    # 結果の記録
+                    data = [[str(e), str(t), str(score), str(collisions), str(r_just_count), str(h) + ':' + str(m) + ':' + str(s)]]
+                    columns = ['episodes', 'step', 'reward_sum', 'collisions', 'goal', 'time']
+                    data = pd.DataFrame(data, columns=columns)
+                    self.excel(data, columns, f_train_name)
+                    
+                    # 各結果をリストへ格納
+                    old_score.append(score)
+                    old_collisions.append(collisions)
+                    r_just_list.append(r_just_count)
+                    color_list.append(color_count)
+
+                    break
+                
+                # 他のロボットがフィールド外に下側に存在する場合強制終了
+                if e >= self.termination_e and self.mode == 'sim':
+                    termination = env.area_judge(terms='soft', area='left')
+                    if termination:
+                        break
+            
+            # モデルの保存
+            if self.save_model and e >= self.save_episode:
+                self.model.save(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(e) + '/robot_' + str(self.robot_n))
+                self.rbuf.save(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(e) + '/robot_' + str(self.robot_n) + '/replay_buffer')
+            else:
+                self.model.save(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(e) + '/robot_' + str(self.robot_n))
+                # self.rbuf.save(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(e) + '/robot_' + str(self.robot_n) + '/replay_buffer')
+            
+            # エピソードごとの同期(他ロボットが右のエリアにいることを確認することで同期を取る)
+            if self.synchro and e != self.episode:
+                env.set_robot(102) # フィールド外の右側に配置
+                sync = False
+                while sync == False:
+                    sync = env.area_judge(terms='hard', area='right')
+                time.sleep(0.5)
+                env.set_robot(0) # 初期位置に配置
+
+            # 学習中に強制終了の処置がされた場合
+            if termination:
+                break
+
+        # 最高点の時の情報を取得
+        best_episode = old_score.index(max(old_score)) + 1 # scoreが最大のエピソード
+        r_just_count = r_just_list[best_episode - 1]
+        collisions = old_collisions[best_episode - 1]
+        color_count = color_list[best_episode - 1]
+
+        # 評価値の出力
+        print('finish train (robot' + str(self.robot_n) + ': collision=' + str(collisions) + ', goal=' + str(r_just_count) + ', best_episode=' + str(best_episode) + ')')
+        
+        # 学習終了時の同期(他ロボットが左のエリアにいることを確認することで同期を取る)
+        if self.mode == 'sim':
+            env.set_robot(103) # フィールド外の左側に配置
+            sync = False
+            while sync == False:
+                sync = env.area_judge(terms='hard', area='left')
+            time.sleep(0.5)
+        
+        # テストに用いるエピソードモデルの選択
+        if e <= 2:
+            test_episodes = [e, e, e] # 学習を3回以上行っていない場合は最後のエピソードを3回テスト
+        elif self.all_episode_test:
+            test_episodes = list(range(1, self.episode + 1)) # すべてのエピソードをテスト
+        else:
+            test_episodes = [e, e - 1, e - 2] # 最後のエピソードから1, 2, 3番目をテスト
+
+        return test_episodes
+
+    # テスト
+    def evaluate(self, test_e):
+
+        if self.robot_n in self.screen_list:
+            print('start episode ' + str(test_e) + ' test (robot ' + str(self.robot_n) +')')
+        
+        old_score = []
+        old_collisions = []
+        r_just_list = []
+        color_list = []
+        step_list = []
+
+        start_time = time.time()
+
+        if test_e == 999: # 指定されたモデルのロード
+            self.model.load(self.dirPath + '/load_model/robot_' + str(self.robot_n))
+        else: # 学習の内指定されたエピソードのロード
+            self.model.load(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(test_e) + '/robot_' + str(self.robot_n))
+
+        with self.model.eval_mode():
+            for eval_e in range(1, self.eval_episode + 1):
+
+                collision = False
+                done = False
+
+                if self.mode == 'sim':
+                    env.set_robot(eval_e)
+                else: # real
+                    while True:
+                        yn = input('set the robot(y/n)')
+                        if yn == 'y':
+                            break
+                
+                state = env.reset()
+                state = torch.from_numpy(state).float()
+
+                score = 0
+                collisions = 0
+                color_count = 0
+                r_just_count = 0
+
+                for t in range(1, self.test_step + 1):
+
+                    action = self.model.act(state)
+
+                    ##### shielding(リカバリー方策) #####
+                    if self.recovery and t >= 2:
+                        if color_num < 100:
+                            action = env.recovery_change_action(test_e, input_scan, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
+                        pass
+                    #####################################
+
+                    next_state, reward, color_num, just_count, collision, goal, input_scan = env.step(action, test=True)
+                    next_state = torch.from_numpy(next_state).float()
+                    self.model.observe(next_state, reward, collision, reset=False)
+
+                    r_just_count += just_count
+                    color_count += color_num
+                    score += reward
+                    state = next_state
+
+                    if goal:
+                        done = True
+                    elif collision:
+                        collisions += 1
+                        done = True
+                    elif t == self.test_step:
+                        done = True
+                    
+                    if done:
+                        # 時間を計算
+                        m, s = divmod(int(time.time() - start_time), 60)
+                        h, m = divmod(m, 60)
+
+                        # 結果の出力
+                        if self.robot_n in self.screen_list:
+                            print('Test: {} step: {} score: {:.2f} collision: {} goal: {} time: {}:{:02d}:{:02d}'.format(
+                                  eval_e, t, score, collisions, r_just_count, h, m, s))
+                        
+                        # 結果の記録
+                        if eval_e == 1:
+                            data = [[str(test_e)]]
+                            columns = ['episodes']
+                            self.excel(data, columns, f_test_name)
+                        data = [[str(t), str(score), str(collisions), str(r_just_count), str(h) + ':' + str(m) + ':' + str(s)]]
+                        columns = ['step', 'reward_sum', 'collisions', 'goal', 'time']
+                        data = pd.DataFrame(data, columns=columns)
+                        self.excel(data, columns, f_test_name)
+
+                        # 評価に使うステップ数の定義
+                        if collision:
+                            t_eval = self.test_step
+                        else:
+                            t_eval = t
+
+                        # 結果を格納
+                        old_score.append(score)
+                        old_collisions.append(collisions)
+                        r_just_list.append(r_just_count)
+                        color_list.append(color_count)
+                        step_list.append(t_eval)
+
+                        # 他ロボットが右のエリアにいることを確認することで同期を取る
+                        if self.mode == 'sim':
+                            env.set_robot(105) # フィールド外の上側に配置
+                            sync = False
+                            while sync == False:
+                                sync = env.area_judge(terms='hard', area='upper')
+                            time.sleep(0.5)
+                        
+                        break
+        
+        if self.mode == 'sim':
+            env.set_robot(0)
+
+        # テスト結果の平均を参照
+        collisions = sum(old_collisions) / len(old_collisions)
+        r_just_count = sum(r_just_list) / len(r_just_list)
+        color_count = sum(color_list) / len(color_list)
+        step_count = sum(step_list) / len(step_list)
+
+        # ロボットの評価値を算出
+        a = 0.8
+        b = 0.2
+        score = a * (100 * r_just_count) + b * (100 * (self.test_step - step_count) / self.test_step)
+
+        # テスト平均の出力
+        print('finish test (robot' + str(self.robot_n) + ': score=' + str(round(score, 2)) + ', collision=' + str(round(collisions, 2)) + ', step=' + str(round(step_count, 2)) + ', goal=' + str(round(r_just_count, 2)) + ', test_episode=' + str(test_e) + ')')
+        
+        # 評価の書き込み
+        data = [[str(test_e), str(step_count), str(collisions), str(r_just_count), str(score)]]
+        columns = ['episodes', 'step_ave', 'collisions_ave', 'goal_ave', 'evaluation']
+        data = pd.DataFrame(data, columns=columns)
+        self.excel(data, columns, f_evaluate_name)
+
+        # テストに用いたモデルをdirPath2に保存
+        self.model.save(self.dirPath2 + '/TRIAL' + str(trials) + '/episode' + str(test_e) + '/robot_' + str(self.robot_n))
+
+        return score
+
+    # デモンストレーション
+    def demo(self):
+        
+        # 使用するモデルのロード
+        self.model.load(self.dirPath + '/load_model/robot_' + str(self.robot_n))
+        # self.rbuf.load(self.dirPath + '/load_model/robot_' + str(self.robot_n) + '/replay_buffer')
+        
+        # ロボットを初期位置配置
+        if self.mode == 'sim':
+            env.set_robot(0)
+
+        if self.robot_n in self.screen_list:
+            print('\nstart show (robot' + str(self.robot_n) + ')')
+        
+        start_time = time.time()
+
+        step_total = 0
+
+        with self.model.eval_mode():
+            while True:
+
+                collision = False
+                
+                state = env.reset()
+                state = torch.from_numpy(state).float()
+
+                score = 0
+                collisions = 0
+                color_count = 0
+                r_just_count = 0
+
+                for t in range(1, self.episode_step + 1):
+
+                    action = self.model.act(state)
+
+                    ##### shielding(リカバリー方策) #####
+                    if self.recovery and t >= 2:
+                        if color_num < 100:
+                            action = env.recovery_change_action(1, input_scan, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
+                        pass
+                    #####################################
+
+                    next_state, reward, color_num, just_count, collision, goal, input_scan = env.step(action, test=False)
+                    next_state = torch.from_numpy(next_state).float()
+                    self.model.observe(next_state, reward, collision, reset=False)
+
+                    r_just_count += just_count
+                    color_count += color_num
+                    score += reward
+                    state = next_state
+
+                    if goal:
+                        pass
+                    elif collision:
+                        collisions += 1
+                        collision = False
+                    
+                    if t == self.episode_step:
+
+                        step_total += self.episode_step
+
+                        # 時間を計算
+                        m, s = divmod(int(time.time() - start_time), 60)
+                        h, m = divmod(m, 60)
+
+                        # 結果の出力
+                        if self.robot_n in self.screen_list:
+                            print('step: {} score: {:.2f} collision: {} goal: {} time: {}:{:02d}:{:02d}'.format(
+                            step_total, score, collisions, r_just_count, h, m, s))
+                        
+                        break
+
+
+def get_value_by_name(name): # データベースの情報を適切な型に直して参照する
+    cursor_to_main.execute('SELECT value FROM to_main WHERE name = ?', (name,))
+    result = cursor_to_main.fetchone()
+    
+    if result and result[0] is not None:
+        value = result[0]
+        try:
+            float_value = float(value) # 値がfloatに変換可能なら試行
+            if float_value.is_integer(): # 小数点以下が0ならintに変換
+                return int(float_value)
+            return float_value
+        except ValueError:
+            try:
+                func = eval(value)
+                if callable(func):
+                    return func # 値が関数名の場合は実行可能な関数を返す
+                else:
+                    return value  # eval 結果が関数でない場合はそのまま返す
+            except (NameError, SyntaxError): # それ以外の場合はそのまま文字列として返す
+                return value
+    else:
+        return None
+
+
+# メイン
+if __name__ == '__main__':
+    rospy.init_node('main_goal_3rb')
+
+    training = True # 学習の有無
+    evaluation = True # テストの有無
+    demonstration = False # デモンストレーションの有無
+    load_test_num = 3 # ロードしたモデルでテストする回数(training = False, evaluation = True の場合) ※3以上必須
+
+    # 実験開始時間の取得
+    dt = datetime.now() # 現在時刻の取得
+    dtstr = dt.strftime('%m_%d_%H:%M:%S') # y(year), m(month), d(day), H(hour), M(minute), S(second)
+
+    to_main_db_name = os.path.dirname(os.path.realpath(__file__)) + "/score/to_main.db"
+
+    while True: # 全トライアルの処理が終わるまでループ
+
+        # データベースファイルが作成されたら処理を進める
+        while True:
+            if os.path.exists(os.path.dirname(to_main_db_name)):
+                if os.path.exists(to_main_db_name):
+                    break
+            time.sleep(0.1)
+
+        # パラメータがセットされたら処理を進める
+        to_main = sqlite3.connect(to_main_db_name)
+        cursor_to_main = to_main.cursor()
+        while True:
+            cursor_to_main.execute('SELECT COUNT(*) FROM to_main WHERE is_set = 0')
+            if cursor_to_main.fetchone()[0] == 0:
+                break
+            time.sleep(0.1)
+
+        # 変数にデータを格納
+        network = get_value_by_name('network')
+        conv_num = get_value_by_name('conv_num')
+        mid_layer_num = get_value_by_name('mid_layer_num')
+        mid_units1 = get_value_by_name('mid_units1')
+        mid_units2 = get_value_by_name('mid_units2')
+        mid_units3 = get_value_by_name('mid_units3')
+        cnv_act = get_value_by_name('cnv_act')
+        ful_act = get_value_by_name('ful_act')
+        optimizer = get_value_by_name('optimizer')
+        batch_size = get_value_by_name('batch_size')
+        r_collision = get_value_by_name('r_collision')
+        r_just = get_value_by_name('r_just')
+        r_near = get_value_by_name('r_near')
+        r_goal = get_value_by_name('r_goal')
+        r_cost = get_value_by_name('r_cost')
+        r_passive = get_value_by_name('r_passive')
+        Target = get_value_by_name('Target')
+        trials = get_value_by_name('trials')
+        trial_size = get_value_by_name('trial_size')
+
+        agent = ReinforceAgent(network, conv_num, mid_layer_num, mid_units1, mid_units2, 
+                               mid_units3, cnv_act, ful_act, optimizer, batch_size, Target, 
+                               trials)
+
+        env = Env(agent.mode, agent.robot_n, agent.lidar_num, agent.input_list, 
+                  agent.teleport, r_collision, r_just, r_near, r_goal, r_cost, r_passive, 
+                  Target, agent.mask_switch, agent.display_image_normal, agent.display_image_mask, 
+                  agent.display_rb)
+
+        #########記録ファイル作成########################################################
+        if training:
+            # 学習ファイル
+            f_train_file = os.path.dirname(os.path.realpath(__file__)) + '/score/'
+            f_train_name = f_train_file + str(agent.robot_n) + "_goal_3rb_" + str(Target) + "_" + dtstr + "_train.xlsx"
+            # ディレクトリがない場合、作成する
+            if not os.path.exists(f_train_file):
+                os.makedirs(f_train_file)
+            if trials == 0 or trials == agent.trial_restart:
+                columns = ['trials', 'episodes', 'step', 'reward_sum', 'collisions', 'goal', 'time']
+                df = pd.DataFrame(columns=columns)
+                df.to_excel(f_train_name, index=False)
+            # トライアル数を書き込む
+            data = [[''], [str(trials)]]
+            columns = ['trials']
+            agent.excel(data, columns, f_train_name)
+        if evaluation:
+            # テストファイル
+            f_test_file =  os.path.dirname(os.path.realpath(__file__)) + '/score/'
+            f_test_name = f_test_file + str(agent.robot_n) + "_goal_3rb_" + str(Target) + "_" + dtstr + "_test.xlsx"
+            # ディレクトリがない場合、作成する
+            if not os.path.exists(f_test_file):
+                os.makedirs(f_test_file)
+            if trials == 0 or trials == agent.trial_restart:
+                columns = ['trials', 'episodes', 'step', 'reward_sum', 'collisions', 'goal', 'time']
+                df = pd.DataFrame(columns=columns)
+                df.to_excel(f_test_name, index=False)
+            # トライアル数を書き込む
+            data = [[''], [str(trials)]]
+            columns = ['trials']
+            agent.excel(data, columns, f_test_name)
+
+            # 評価ファイル
+            f_evaluate_file =  os.path.dirname(os.path.realpath(__file__)) + '/score/'
+            f_evaluate_name = f_evaluate_file + str(agent.robot_n) + "_goal_3rb_" + str(Target) + "_" + dtstr + "_evaluate.xlsx"
+            # ディレクトリがない場合、作成する
+            if not os.path.exists(f_evaluate_file):
+                os.makedirs(f_evaluate_file)
+            if trials == 0 or trials == agent.trial_restart:
+                columns = ['trials', 'episodes', 'step_ave', 'collisions_ave', 'goal_ave', 'evaluation']
+                df = pd.DataFrame(columns=columns)
+                df.to_excel(f_evaluate_name, index=False)
+            # トライアル数を書き込む
+            data = [[''], [str(trials)]]
+            columns = ['trials']
+            agent.excel(data, columns, f_evaluate_name)
+        ################################################################################
+        
+        #########ロボットの学習・テスト・デモ#################
+        if training:
+            test_episodes = agent.train() # 学習の実行
+            score_list = [0, 0, 0]
+        if evaluation:
+            score_list = []
+            if 'test_episodes' not in locals():
+                test_episodes = [999 for _ in range(load_test_num)]
+            for test_e in test_episodes:
+                score = agent.evaluate(test_e)  # テストの実行
+                score_list.append(score)
+        if demonstration:
+            agent.demo() # デモンストレーションの実行
+            score_list = [0, 0, 0]
+        if not training and not evaluation and not demonstration:
+            score_list = [100, 100, 100]
+            print('training/evaluation/demonstration のどれかをTrueにしてください!')
+            time.sleep(3)
+        #######################################################
+        
+        score_list = score_list[-3:] # 評価リストの後方3つを採用する
+
+        # データベースにあるパラメータ値の削除とsetフラグの解除
+        cursor_to_main.execute('''
+        UPDATE to_main
+        SET value = NULL, is_set = 0
+        ''')
+        to_main.commit()
+
+        # 結果格納用データベースに結果を格納
+        for data in score_list:
+            to_optuna = sqlite3.connect(os.path.dirname(os.path.realpath(__file__)) + "/score/to_optuna.db")
+            cursor_to_optuna = to_optuna.cursor()
+            cursor_to_optuna.execute("INSERT INTO to_optuna (process_id, data) VALUES (?, ?)", (agent.robot_n, data))
+            to_optuna.commit()
+            to_optuna.close()
+        
+        # 最後のトライアルでループを抜ける
+        if trials + 1 == trial_size:
+            break
