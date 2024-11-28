@@ -511,10 +511,10 @@ if __name__ == '__main__':
     # 探索実行
     if choice_param_only: # 指定したパラメータのみを用いる
         for i in range(trial_size):
-            study.enqueue_trial({'conv_num': 2, 'mid_layer_num': 2, 'mid_units1': 512, 'mid_units2': 512, 'r_collision': 1000, 'r_just': 0.4, 'r_near': 5, 'r_goal': 2000, 'r_cost': 10, 'r_passive': 50})
+            study.enqueue_trial({'conv_num': 2, 'mid_layer_num': 2, 'mid_units1': 512, 'mid_units2': 512, 'r_collision': 1000, 'r_near': 10, 'r_center': 10, 'r_just': 100})
             study.optimize(main, n_trials=1)
     elif fix: # 初期値の固定
-        study.enqueue_trial({'conv_num': 2, 'mid_layer_num': 2, 'mid_units1': 512, 'mid_units2': 512, 'r_collision': 1000, 'r_just': 0.4, 'r_near': 5, 'r_goal': 2000, 'r_cost': 10, 'r_passive': 50})
+        study.enqueue_trial({'conv_num': 2, 'mid_layer_num': 2, 'mid_units1': 512, 'mid_units2': 512, 'r_collision': 1000, 'r_near': 10, 'r_center': 10, 'r_just': 100})
         study.optimize(main, n_trials=trial_size)
     else: # スタンダード
         study.optimize(main, n_trials=trial_size)
