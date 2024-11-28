@@ -257,9 +257,7 @@ class ReinforceAgent():
 
                 ##### shielding(リカバリー方策) #####
                 if self.recovery and t >= 2:
-                    if color_num < 100:
-                        action = env.recovery_change_action(e, input_scan, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
-                    pass
+                    action = env.recovery_change_action(e, input_scan, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
                 #####################################
 
                 next_state, reward, color_num, just_count, collision, input_scan = env.step(action, test=False) # 行動、状態の観測、報酬の一連の処理
@@ -285,12 +283,12 @@ class ReinforceAgent():
 
                     # 結果の出力
                     if self.robot_n in self.screen_list:
-                        print('Ep: {} score: {:.2f} collision: {} goal: {} time: {}:{:02d}:{:02d}'.format(
-                              e, score, collisions, r_just_count, h, m, s))
+                        print('Ep: {} score: {:.2f} collision: {} follow: {} color_num: {} time: {}:{:02d}:{:02d}'.format(
+                              e, score, collisions, r_just_count, color_count, h, m, s))
 
                     # 結果の記録
-                    data = [[str(e), str(t), str(score), str(collisions), str(r_just_count), str(h) + ':' + str(m) + ':' + str(s)]]
-                    columns = ['episodes', 'step', 'reward_sum', 'collisions', 'goal', 'time']
+                    data = [[str(e), str(t), str(score), str(collisions), str(r_just_count), str(color_count), str(h) + ':' + str(m) + ':' + str(s)]]
+                    columns = ['episodes', 'step', 'reward_sum', 'collisions', 'follow', 'color_num', 'time']
                     data = pd.DataFrame(data, columns=columns)
                     self.excel(data, columns, f_train_name)
                     
@@ -336,7 +334,7 @@ class ReinforceAgent():
         color_count = color_list[best_episode - 1]
 
         # 評価値の出力
-        print('finish train (robot' + str(self.robot_n) + ': collision=' + str(collisions) + ', goal=' + str(r_just_count) + ', best_episode=' + str(best_episode) + ')')
+        print('finish train (robot' + str(self.robot_n) + ': collision=' + str(collisions) + ', follow=' + str(r_just_count) + ', color_num=' + str(color_count) + ', best_episode=' + str(best_episode) + ')')
         
         # 学習終了時の同期(他ロボットが左のエリアにいることを確認することで同期を取る)
         if self.mode == 'sim':
@@ -348,7 +346,7 @@ class ReinforceAgent():
         
         # テストに用いるエピソードモデルの選択
         if e <= 2:
-            test_episodes = [e, e, e] # 学習を3回以上行っていない場合は最後のエピソードを3回テスト
+            test_episodes = [e, e, e] # 学習を3エピソード以上行っていない場合は最後のエピソードを3回テスト
         elif self.all_episode_test:
             test_episodes = list(range(1, self.episode + 1)) # すべてのエピソードをテスト
         else:
@@ -403,9 +401,7 @@ class ReinforceAgent():
 
                     ##### shielding(リカバリー方策) #####
                     if self.recovery and t >= 2:
-                        if color_num < 100:
-                            action = env.recovery_change_action(test_e, input_scan, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
-                        pass
+                        action = env.recovery_change_action(test_e, input_scan, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
                     #####################################
 
                     next_state, reward, color_num, just_count, collision, input_scan = env.step(action, test=True)
@@ -430,31 +426,25 @@ class ReinforceAgent():
 
                         # 結果の出力
                         if self.robot_n in self.screen_list:
-                            print('Test: {} step: {} score: {:.2f} collision: {} goal: {} time: {}:{:02d}:{:02d}'.format(
-                                  eval_e, t, score, collisions, r_just_count, h, m, s))
+                            print('Test: {} step: {} score: {:.2f} collision: {} follow: {} color_num: {} time: {}:{:02d}:{:02d}'.format(
+                                  eval_e, t, score, collisions, r_just_count, color_count, h, m, s))
                         
                         # 結果の記録
                         if eval_e == 1:
                             data = [[str(test_e)]]
                             columns = ['episodes']
                             self.excel(data, columns, f_test_name)
-                        data = [[str(t), str(score), str(collisions), str(r_just_count), str(h) + ':' + str(m) + ':' + str(s)]]
-                        columns = ['step', 'reward_sum', 'collisions', 'goal', 'time']
+                        data = [[str(t), str(score), str(collisions), str(r_just_count), str(color_count), str(h) + ':' + str(m) + ':' + str(s)]]
+                        columns = ['step', 'reward_sum', 'collisions', 'follow', 'color_num', 'time']
                         data = pd.DataFrame(data, columns=columns)
                         self.excel(data, columns, f_test_name)
-
-                        # 評価に使うステップ数の定義
-                        if collision:
-                            t_eval = self.test_step
-                        else:
-                            t_eval = t
 
                         # 結果を格納
                         old_score.append(score)
                         old_collisions.append(collisions)
                         r_just_list.append(r_just_count)
                         color_list.append(color_count)
-                        step_list.append(t_eval)
+                        step_list.append(t)
 
                         # 他ロボットが右のエリアにいることを確認することで同期を取る
                         if self.mode == 'sim':
@@ -478,14 +468,17 @@ class ReinforceAgent():
         # ロボットの評価値を算出
         a = 0.8
         b = 0.2
-        score = a * (100 * r_just_count) + b * (100 * (self.test_step - step_count) / self.test_step)
-
+        if agent.robot_n == 0:
+            score = a * (100 * (1 - collisions)) + b * (100 * step_count / self.test_step)
+        elif agent.robot_n != 0:
+            score = a * (100 * r_just_count / self.test_step) + b * (100 * (1 - collisions))
+        
         # テスト平均の出力
-        print('finish test (robot' + str(self.robot_n) + ': score=' + str(round(score, 2)) + ', collision=' + str(round(collisions, 2)) + ', step=' + str(round(step_count, 2)) + ', goal=' + str(round(r_just_count, 2)) + ', test_episode=' + str(test_e) + ')')
+        print('finish test (robot' + str(self.robot_n) + ': score=' + str(round(score, 2)) + ', collision=' + str(round(collisions, 2)) + ', step=' + str(round(step_count, 2)) + ', follow=' + str(round(r_just_count, 2)) + ', color_num=' + str(round(color_count, 2)) + ', test_episode=' + str(test_e) + ')')
         
         # 評価の書き込み
-        data = [[str(test_e), str(step_count), str(collisions), str(r_just_count), str(score)]]
-        columns = ['episodes', 'step_ave', 'collisions_ave', 'goal_ave', 'evaluation']
+        data = [[str(test_e), str(step_count), str(collisions), str(r_just_count), str(color_count), str(score)]]
+        columns = ['episodes', 'step_ave', 'collisions_ave', 'follow_ave', 'color_num_ave', 'evaluation']
         data = pd.DataFrame(data, columns=columns)
         self.excel(data, columns, f_evaluate_name)
 
@@ -533,7 +526,6 @@ class ReinforceAgent():
                     if self.recovery and t >= 2:
                         if color_num < 100:
                             action = env.recovery_change_action(1, input_scan, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
-                        pass
                     #####################################
 
                     next_state, reward, color_num, just_count, collision, input_scan = env.step(action, test=False)
@@ -559,8 +551,8 @@ class ReinforceAgent():
 
                         # 結果の出力
                         if self.robot_n in self.screen_list:
-                            print('step: {} score: {:.2f} collision: {} goal: {} time: {}:{:02d}:{:02d}'.format(
-                            step_total, score, collisions, r_just_count, h, m, s))
+                            print('step: {} score: {:.2f} collision: {} follow: {} color_num: {} time: {}:{:02d}:{:02d}'.format(
+                            step_total, score, collisions, r_just_count, color_count, h, m, s))
                         
                         break
 
@@ -663,7 +655,7 @@ if __name__ == '__main__':
             if not os.path.exists(f_train_file):
                 os.makedirs(f_train_file)
             if trials == 0 or trials == agent.trial_restart:
-                columns = ['trials', 'episodes', 'step', 'reward_sum', 'collisions', 'goal', 'time']
+                columns = ['trials', 'episodes', 'step', 'reward_sum', 'collisions', 'follow', 'color_num', 'time']
                 df = pd.DataFrame(columns=columns)
                 df.to_excel(f_train_name, index=False)
             # トライアル数を書き込む
@@ -678,7 +670,7 @@ if __name__ == '__main__':
             if not os.path.exists(f_test_file):
                 os.makedirs(f_test_file)
             if trials == 0 or trials == agent.trial_restart:
-                columns = ['trials', 'episodes', 'step', 'reward_sum', 'collisions', 'goal', 'time']
+                columns = ['trials', 'episodes', 'step', 'reward_sum', 'collisions', 'follow', 'color_num', 'time']
                 df = pd.DataFrame(columns=columns)
                 df.to_excel(f_test_name, index=False)
             # トライアル数を書き込む
@@ -693,7 +685,7 @@ if __name__ == '__main__':
             if not os.path.exists(f_evaluate_file):
                 os.makedirs(f_evaluate_file)
             if trials == 0 or trials == agent.trial_restart:
-                columns = ['trials', 'episodes', 'step_ave', 'collisions_ave', 'goal_ave', 'evaluation']
+                columns = ['trials', 'episodes', 'step_ave', 'collisions_ave', 'follow_ave', 'color_num_ave', 'evaluation']
                 df = pd.DataFrame(columns=columns)
                 df.to_excel(f_evaluate_name, index=False)
             # トライアル数を書き込む
