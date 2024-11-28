@@ -51,7 +51,7 @@ class Env():
         # LiDARについての設定
         self.lidar_max = 2 # 対象のworldにおいて取りうるlidarの最大値(simの貫通対策や正規化に使用)
         self.lidar_min = 0.12 # lidarの最小測距値[m]
-        self.range_margin = self.lidar_min + 0.03 # 衝突として処理される距離[m] 0.02
+        self.range_margin = self.lidar_min + 0.02 # 衝突として処理される距離[m] 0.02
 
     def get_clock(self):
         if self.mode == 'sim':
@@ -80,7 +80,6 @@ class Env():
                 try:
                     scan = rospy.wait_for_message('scan', LaserScan, timeout=1) # LiDAR値の取得(1deg刻み360方向の距離情報を取得)
                 except:
-                    self.stop()
                     pass
             
             data_range = [] # 取得したLiDAR値を修正して格納するリスト
@@ -123,7 +122,6 @@ class Env():
                     else:
                        img = rospy.wait_for_message('usb_cam/image_raw/compressed', CompressedImage, timeout=1) # 実機用(圧縮データ)
                 except:
-                    self.stop()
                     pass
             
             if self.mode == 'sim':
@@ -328,7 +326,6 @@ class Env():
         
         if self.robot_n == 0 and action != 3:
             vel_cmd.linear.x = vel_cmd.linear.x * 0.7
-            vel_cmd.angular.z = vel_cmd.linear.x * 0.7
         
         self.pub_cmd_vel.publish(vel_cmd) # 実行
         state_list, input_scan, collision = self.getState() # 状態観測
@@ -753,22 +750,22 @@ class Env():
         for rb in judge_robot:
             judge_list.append(area_coordinate[0] < rb[0] < area_coordinate[1] and area_coordinate[2] < rb[1] < area_coordinate[3])
         
-        if terms == 'hard' and (judge_list[0] and judge_list[1] and judge_list[2]): # 他の全ロボットがエリアに存在する時
+        if terms == 'hard' and (judge_list[0] and judge_list[1]): # 他の全ロボットがエリアに存在する時
             exist = True
-        elif terms == 'soft' and (judge_list[0] or judge_list[1] or judge_list[2]): # 他のロボットが1台でもエリアに存在する時
+        elif terms == 'soft' and (judge_list[0] or judge_list[1]): # 他のロボットが1台でもエリアに存在する時
             exist = True
 
         return exist
 
     # 以降リカバリー方策
-    def recovery_change_action(self, e, input_scan, lidar_num, action, state, model): # LiDARの数値が低い方向への行動を避ける
+    def recovery_change_action(self, e, lidar_num, action, state, model): # LiDARの数値が低い方向への行動を避ける
 
         ### ユーザー設定パラメータ ###
-        threshold = 0.2 # 動きを変える距離(LiDAR値)[m]
+        threshold = 0.45 # 動きを変える距離(LiDAR値)[m]
         probabilistic = True # True: リカバリー方策を確率的に利用する, False: リカバリー方策を必ず利用する
         initial_probability = 1.0 # 最初の確率
-        finish_episode = 25 # 方策を適応する最後のエピソード
-        mode_change_episode = 11 # 行動変更のトリガーをLiDAR値からQ値に変えるエピソード
+        finish_episode = 10 # 方策を適応する最後のエピソード
+        mode_change_episode = 6 # 行動変更のトリガーをLiDAR値からQ値に変えるエピソード
         ############################
 
         # リカバリー方策の利用判定
@@ -783,12 +780,14 @@ class Env():
         bad_action = []
 
         # 方向の定義
-        left = list(range(2, lidar_num // 4 + 1)) # LiDARの前方左側
-        forward = [0, 1, lidar_num - 1] # LiDARの前方とする要素番号(左右数度ずつ)
-        right = list(range(lidar_num * 3 // 4, lidar_num - 1)) # LiDARの前方右側
+        forward_deg = 40 # 正面とする角度の定義[deg]
+        lidar_deg = 360 // lidar_num # 1要素間の角度[deg]
+        forward = list(range(0, (forward_deg // 2) // lidar_deg + 1)) # LiDARの正面とする要素番号
+        left = list(range((forward_deg // 2) // lidar_deg + 1, lidar_num // 4 + 1)) # LiDARの前方左側
+        right = list(range(lidar_num * 3 // 4, lidar_num - ((forward_deg // 2) // lidar_deg))) # LiDARの前方右側
 
         # LiDARのリストで条件に合う要素を格納したリストをインスタンス化(element_num:要素番号, element_cont:要素内容)
-        low_lidar = [element_num for element_num, element_cont in enumerate(input_scan) if element_cont <= threshold]
+        low_lidar = [element_num for element_num, element_cont in enumerate(self.scan) if element_cont <= threshold]
 
         # 指定したリストと条件に合う要素のリストで同じ数字があった場合は行動を変更する(actionを 0は左折, 1は直進, 2は右折 に設定する必要あり)
         if set(left) & set(low_lidar) != set():
@@ -797,7 +796,7 @@ class Env():
                 change_action = True
         if set(forward) & set(low_lidar) != set():
             bad_action.append(1)
-            if action == 1:
+            if action == 1 or action == 3:
                 change_action = True
         if set(right) & set(low_lidar) != set():
             bad_action.append(2)
@@ -808,10 +807,10 @@ class Env():
         if change_action:
             if e < mode_change_episode: # LiDAR値による行動の変更
                 # 各方向のLiDAR値
-                front_scan = input_scan[0:left[-1] + 1] + input_scan[right[0]:lidar_num]
-                left_scan = input_scan[left[0]:left[-1] + 1]
-                forward_scan = input_scan[0:left[0]] + input_scan[right[-1] + 1:lidar_num]
-                right_scan = input_scan[right[0]:right[-1] + 1]
+                front_scan = self.scan[0:left[-1] + 1] + self.scan[right[0]:lidar_num]
+                left_scan = self.scan[left[0]:left[-1] + 1]
+                forward_scan = self.scan[0:left[0]] + self.scan[right[-1] + 1:lidar_num]
+                right_scan = self.scan[right[0]:right[-1] + 1]
                 scan_list = [left_scan, forward_scan, right_scan]
                 if len(bad_action) == 3: # 全方向のLiDAR値が低い場合はLiDAR値が最大の方向へ
                     if max(front_scan) in left_scan:
@@ -841,5 +840,7 @@ class Env():
                         action = action_candidate[0]
                     else:
                         action = action_candidate[1]
+            if action == 1:
+                action = 3
 
         return action

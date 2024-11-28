@@ -44,11 +44,11 @@ class ReinforceAgent():
         self.net = network
         self.exploration = 'd_egreedy' # d_egreedy(decay_epsilon_greedy) or c_egreedy(constant_epsilon_greedy)
         self.lidar_num = 36 # DQNに入力するlidarの方向数
-        self.action_size = 5 # 行動の種類数
-        self.episode = 40 # 40
+        self.action_size = 4 # 行動の種類数
+        self.episode = 30 # 40
         self.eval_episode = 6 # 6
         self.episode_step = 500 # 500
-        self.test_step = 200 # 200
+        self.test_step = 500 # 200
         self.target_update = 500 # 500
         self.multistep = 2
         self.discount_factor = 0.9 # 割引率 0.9
@@ -257,7 +257,7 @@ class ReinforceAgent():
 
                 ##### shielding(リカバリー方策) #####
                 if self.recovery and t >= 2:
-                    action = env.recovery_change_action(e, input_scan, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
+                    action = env.recovery_change_action(e, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
                 #####################################
 
                 next_state, reward, color_num, just_count, collision, input_scan = env.step(action, test=False) # 行動、状態の観測、報酬の一連の処理
