@@ -179,8 +179,6 @@ class ReinforceAgent():
             self.optimizer = torch.optim.Adamax(self.q_func.parameters())
         elif optimizer == 'RAdam':
             self.optimizer = torch.optim.RAdam(self.q_func.parameters())
-        
-        self.batch_size = batch_size
 
         if self.exploration == 'd_egreedy': # εが減衰
             self.explorer = greedy_follow_3rb.MyEpsilonGreedy(
@@ -207,7 +205,7 @@ class ReinforceAgent():
             self.q_func, optimizer=self.optimizer, replay_buffer=self.rbuf, 
             gamma=self.discount_factor, explorer=self.explorer, 
             gpu=self.gpu, replay_start_size=self.replay_start_size, 
-            minibatch_size=self.batch_size, update_interval=1, 
+            minibatch_size=batch_size, update_interval=1, 
             target_update_interval=self.target_update, n_times_update=1
         )
 
