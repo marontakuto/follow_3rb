@@ -325,10 +325,6 @@ class Env():
         state_list, collision = self.getState() # 状態観測
         reward, color_num, just_count = self.setReward(collision, action) # 報酬計算
 
-        if test and collision:
-            self.stop()
-            time.sleep(0.5)
-
         if not test: # テスト時でないときの処理
             if collision and not self.teleport:
                 self.restart() # 進行方向への向き直し
