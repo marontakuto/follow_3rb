@@ -19,34 +19,45 @@ import cv2
 from sensor_msgs.msg import Image, CompressedImage
 import ros_numpy
 
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
+
 class Env():
-    def __init__(self, mode, robot_n, lidar_num, input_list, teleport, 
-                 r_collision, r_near, r_center, r_just, 
-                 Target, display_image_normal, display_image_count, display_rb):
+    def __init__(self, mode, robot_n, lidar_num, input_lidar, lidar_past_step, 
+                 input_cam, cam_past_step, teleport, 
+                 r_collision, r_near, r_center, r_just, distance, 
+                 trials, display_image_normal, display_image_count, 
+                 display_rb, cam_width, cam_height):
         
         self.mode = mode
         self.robot_n = robot_n
         self.lidar_num = lidar_num
-        self.input_list = input_list
+        self.input_lidar = input_lidar
+        self.lidar_past_step = lidar_past_step
+        self.input_cam = input_cam
+        self.cam_past_step = cam_past_step
         self.teleport = teleport
-        self.previous_cam_list = deque([])
-        self.previous_lidar_list = deque([])
-        self.previous2_cam_list = deque([])
-        self.previous2_lidar_list = deque([])
+
+        self.cam_list = deque([])
+        self.lidar_list = deque([])
         self.pub_cmd_vel = rospy.Publisher('cmd_vel', Twist, queue_size=5)
         self.reset_proxy = rospy.ServiceProxy('gazebo/reset_simulation', Empty)
 
-        # カメラ画像の出力
+        # カメラ画像
         self.display_image_normal = display_image_normal
         self.display_image_count = display_image_count
         self.display_rb = display_rb
+        self.cam_width = cam_width
+        self.cam_height = cam_height
 
-        # Optunaで選択された報酬値
+        # Optunaで選択された値
         self.r_collision = r_collision
         self.r_near = r_near
         self.r_center = r_center
         self.r_just = r_just
-        self.Target = Target
+        self.distance = distance
+        self.trials = trials
 
         # LiDARについての設定
         self.lidar_max = 2 # 対象のworldにおいて取りうるlidarの最大値(simの貫通対策や正規化に使用)
@@ -131,7 +142,7 @@ class Env():
                 img = np.frombuffer(img.data, np.uint8)
                 img = cv2.imdecode(img, cv2.IMREAD_COLOR) # カラー画像(BGR)
             
-            img = cv2.resize(img, (48, 27)) # 取得した画像を48×27[pixel]に変更
+            img = cv2.resize(img, (self.cam_width, self.cam_height)) # 取得した画像をcam_width×cam_height[pixel]に変更
 
             if self.display_image_normal and self.robot_n in self.display_rb:
                 self.display_image(img, f'camera_normal_{self.robot_n}')
@@ -194,28 +205,6 @@ class Env():
 
         ### 画像の取得と処理 ###
         img = self.get_camera() # カメラ画像の取得
-
-        if ('cam' in self.input_list) or ('previous_cam' in self.input_list) or ('previous2_cam' in self.input_list):
-            input_img = np.asarray(img, dtype=np.float32)
-            input_img /= 255.0 # 画像の各ピクセルを255で割ることで0~1の値に正規化
-            input_img = np.asarray(input_img.flatten())
-            input_img = input_img.tolist()
-
-            state_list = state_list + input_img # [現在]
-
-            if 'previous_cam' in self.input_list:
-                self.previous_cam_list.append(input_img)
-                if len(self.previous_cam_list) > 2: # [1step前 現在]の状態に保つ
-                    self.previous_cam_list.popleft() # 左端の要素を削除(2step前の情報を削除)
-                past_cam = self.previous_cam_list[0] # 1step前の画像
-                state_list = state_list + past_cam # [現在 1step前]
-
-                if 'previous2_cam' in self.input_list:
-                    self.previous2_cam_list.append(input_img)
-                    if len(self.previous2_cam_list) > 3: # [2step前 1step前 現在]の状態に保つ
-                        self.previous2_cam_list.popleft() # 左端の要素を削除(3step前の情報を削除)
-                    past_cam = self.previous2_cam_list[0] # 2step前の画像
-                    state_list = state_list + past_cam # [現在 1step前 2step前]
         
         #### LiDAR情報の取得と処理 ###
         scan = self.get_lidar() # LiDAR値の取得
@@ -226,30 +215,53 @@ class Env():
                 scan_true = [element_cont for element_num, element_cont in enumerate(scan) if element_cont != 0]
                 if scan.count(0) >= 1 and self.range_margin < min(scan_true): # (飛び値が存在する)and(飛び値を除いた場合は衝突判定ではない)
                     collision = False
+        
+        # 入力するカメラ画像の処理
+        if self.input_cam:
+            input_img = np.asarray(img, dtype=np.float32)
+            input_img /= 255.0 # 画像の各ピクセルを255で割ることで0~1の値に正規化
+            input_img = np.asarray(input_img.flatten())
+            input_img = input_img.tolist()
+
+            if len(self.cam_list) == (self.cam_past_step + 1):
+                if np.array_equal(input_img, self.cam_list[0]):
+                    pass
+                else:
+                    self.cam_list.appendleft(input_img)
+            else:
+                self.cam_list.appendleft(input_img)
+
+            if len(self.cam_list) > (self.cam_past_step + 1):
+                self.cam_list.pop()
+
+            state_list_cam = [item for sublist in self.cam_list for item in sublist]
+            for i in range((self.cam_past_step + 1) - len(self.cam_list)):
+                state_list_cam = self.cam_list[0] + state_list_cam
 
         # 入力するLiDAR値の処理
-        if ('lidar' in self.input_list) or ('previous_lidar' in self.input_list) or ('previous2_lidar' in self.input_list):
+        if self.input_lidar:
             input_scan = [] # 正規化したLiDAR値を格納するリスト
             for i in range(len(scan)): # lidar値の正規化
                 input_scan.append((scan[i] - self.range_margin) / (self.lidar_max - self.range_margin))
+            
+            if len(self.lidar_list) == (self.lidar_past_step + 1):
+                if np.array_equal(input_scan, self.lidar_list[0]):
+                    pass
+                else:
+                    self.lidar_list.appendleft(input_scan)
+            else:
+                self.lidar_list.appendleft(input_scan)
 
-            state_list = state_list + input_scan # [画像] + [現在]
+            if len(self.lidar_list) > (self.lidar_past_step + 1):
+                self.lidar_list.pop()
 
-            if 'previous_lidar' in self.input_list:
-                self.previous_lidar_list.append(input_scan)
-                if len(self.previous_lidar_list) > 2: # [1step前 現在]の状態に保つ
-                    self.previous_lidar_list.popleft() # 左端の要素を削除(2step前の情報を削除)
-                past_scan = self.previous_lidar_list[0] # 1step前のLiDAR値
-                state_list = state_list + past_scan # [画像] + [現在 1step前]
-
-                if 'previous2_lidar' in self.input_list:
-                    self.previous2_lidar_list.append(input_scan)
-                    if len(self.previous2_lidar_list) > 3: # [2step前 1step前 現在]の状態に保つ
-                        self.previous2_lidar_list.popleft() # 左端の要素を削除(3step前の情報を削除)
-                    past_scan = self.previous2_lidar_list[0] # 2step前のLiDAR値
-                    state_list = state_list + past_scan # [画像] + [現在 1step前 2step前]
+            state_list_lidar = [item for sublist in self.lidar_list for item in sublist]
+            for i in range((self.lidar_past_step + 1) - len(self.lidar_list)):
+                state_list_lidar = self.lidar_list[0] + state_list_lidar
         
-        return state_list, input_scan, collision
+        state_list = state_list_cam + state_list_lidar
+        
+        return state_list, collision
    
     def setReward(self, collision, action):
 
@@ -261,38 +273,21 @@ class Env():
         _, _, robot_blue_num, robot_green_num = self.get_count(self.img, scope='middle3')
         color_num = robot_blue_num + robot_green_num
 
-        if self.Target == 'both' or self.Target == 'reward':
-            if collision:
-                reward -= self.r_collision
+        if collision:
+            reward -= self.r_collision
 
-            if self.robot_n == 0: # robot0
-                if abs(lidar_value_left - lidar_value_right) <= 0.04 and action == 1:
-                    reward += self.r_center
-            
-            elif self.robot_n != 0: # robot1, 2
-                if abs(lidar_value_left - lidar_value_right) <= 0.04:
-                    reward += self.r_center
-                if (130 >= robot_blue_num >= 30) or (130 >= robot_green_num >= 30):
-                    reward += self.r_just
-                    just_count = 1
-                if (robot_green_num or robot_blue_num) > 130:
-                    reward -= self.r_near
-        else:
-            if collision:
-                reward -= 1000 # r_collision
-
-            if self.robot_n == 0: # robot0
-                if abs(lidar_value_left - lidar_value_right) <= 0.04 and action == 1:
-                    reward += 10 # r_center
-            
-            elif self.robot_n != 0: # robot1, 2
-                if abs(lidar_value_left - lidar_value_right) <= 0.04:
-                    reward += 10 # r_center
-                if (130>= robot_blue_num >=30) or (130 >= robot_green_num >=30):
-                    reward += 100 # r_just
-                    just_count = 1
-                if (robot_green_num or robot_blue_num) > 130:
-                    reward -= 10 # r_near
+        if self.robot_n == 0: # robot0
+            if abs(lidar_value_left - lidar_value_right) <= 0.04 and action == 1:
+                reward += self.r_center
+        
+        elif self.robot_n != 0: # robot1, 2
+            if abs(lidar_value_left - lidar_value_right) <= 0.04:
+                reward += self.r_center
+            if (130 >= robot_blue_num >= 30) or (130 >= robot_green_num >= 30):
+                reward += self.r_just
+                just_count = 1
+            if (robot_green_num or robot_blue_num) > 130:
+                reward -= self.r_near
         
         return reward, color_num, just_count
 
@@ -327,21 +322,25 @@ class Env():
             vel_cmd.linear.x = vel_cmd.linear.x * 0.7
         
         self.pub_cmd_vel.publish(vel_cmd) # 実行
-        state_list, input_scan, collision = self.getState() # 状態観測
+        state_list, collision = self.getState() # 状態観測
         reward, color_num, just_count = self.setReward(collision, action) # 報酬計算
 
-        if not test and collision: # テスト時でないとき衝突した場合の処理
-            if self.teleport:
-                self.relocation() # 空いているエリアへの再配置
-            else:
+        if test and collision:
+            self.stop()
+            time.sleep(0.5)
+
+        if not test: # テスト時でないときの処理
+            if collision and not self.teleport:
                 self.restart() # 進行方向への向き直し
+            elif collision:
+                self.relocation() # 空いているエリアへの再配置
         
-        return np.array(state_list), reward, color_num, just_count, collision, input_scan
+        return np.array(state_list), reward, color_num, just_count, collision
 
     def reset(self):
         self.img = None
         self.scan = None
-        state_list, _, _ = self.getState()
+        state_list, _ = self.getState()
         return np.array(state_list)
     
     def restart(self):
@@ -560,12 +559,6 @@ class Env():
         elif num == 1008:
             XYZyaw = h
         
-        # 配置前の画像取得(テスト限定)
-        if 1 <= num <= 100:
-            img_previous = self.get_camera(retake=True)
-            count_previous = list(self.get_count(img_previous, scope='all'))
-        
-        # 配置
         state_msg = ModelState()
         state_msg.model_name = 'tb3_{}'.format(self.robot_n)
         state_msg.pose.position.x = XYZyaw[0]
@@ -580,14 +573,39 @@ class Env():
         set_state = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
         set_state(state_msg)
 
-        # 配置後に取得される画像が更新されるまでループする(テスト限定)
-        while 1 <= num <= 100:
-            img_now = self.get_camera(retake=True)
-            count_now = list(self.get_count(img_now, scope='all'))
-            if count_previous != count_now:
-                break
-    
+        if 0 <= num <= 100 or 1001 <= num <= 1100:
+            time.sleep(0.1) # 配置後すぐに行動させた場合は配置前の情報が使われることがあるため数秒待機
+
     # 以降追加システム
+    def coordinate_file(self):
+        f_coordinate_file =  os.path.dirname(os.path.realpath(__file__)) + '/result/' # os.path.dirname(os.path.realpath(__file__)) ← カレントディレクトリのパス
+        self.f_coordinate_name = f_coordinate_file + 'coordinate_robot' + str(self.robot_n) + '.txt'
+        if not os.path.exists(f_coordinate_file):
+            os.makedirs(f_coordinate_file)
+        with open(self.f_coordinate_name, 'w') as f: # ファイルに属性を書き込む
+            f.writelines('[')
+
+    def coordinate_get(self): # ロボットの座標の記録
+        ros_data = None
+        while ros_data is None:
+            try:
+                ros_data = rospy.wait_for_message('/gazebo/model_states', ModelStates, timeout=1) # ROSデータの取得
+            except:
+                pass
+        index = ros_data.name.index(f'tb3_{self.robot_n}') # ロボットのデータの配列番号
+        coordinate = [ros_data.pose[index].position.x, ros_data.pose[index].position.y] # ロボットの座標
+        self.path.append(coordinate)  # 座標をリストに追加
+    
+    def coordinate_recode(self, flag_last):
+        if flag_last:
+            text = [str(self.path) + ']\n']
+        else:
+            text = [str(self.path) + ', ']
+        
+        with open(self.f_coordinate_name, 'a') as f:
+            f.writelines(text)
+        self.path = []
+
     def display_image(self, img, name): # カメラ画像の出力
 
         # アスペクト比を維持してリサイズ
@@ -720,11 +738,11 @@ class Env():
     def recovery_change_action(self, e, lidar_num, action, state, model): # LiDARの数値が低い方向への行動を避ける
 
         ### ユーザー設定パラメータ ###
-        threshold = 0.45 # 動きを変える距離(LiDAR値)[m]
-        probabilistic = True # True: リカバリー方策を確率的に利用する, False: リカバリー方策を必ず利用する
+        threshold = self.distance # 動きを変える距離(LiDAR値)[m]
+        probabilistic = False # True: リカバリー方策を確率的に利用する, False: リカバリー方策を必ず利用する
         initial_probability = 1.0 # 最初の確率
-        finish_episode = 10 # 方策を適応する最後のエピソード
-        mode_change_episode = 6 # 行動変更のトリガーをLiDAR値からQ値に変えるエピソード
+        finish_episode = 999 # 方策を適応する最後のエピソード
+        mode_change_episode = 11 # 行動変更のトリガーをLiDAR値からQ値に変えるエピソード
         ############################
 
         # リカバリー方策の利用判定

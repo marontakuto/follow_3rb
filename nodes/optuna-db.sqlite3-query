@@ -1,0 +1,20 @@
+-- database: result/optuna.db
+
+-- ファイル全体を実行するにはウィンドウ右上の▷を押してください。
+-- 指定したトライアルを削除するクエリです
+
+-- 外部キー制約を無効化
+PRAGMA foreign_keys = OFF;
+
+BEGIN TRANSACTION;
+
+DELETE FROM trial_params WHERE trial_id >= 159;
+DELETE FROM trial_values WHERE trial_id >= 159;
+DELETE FROM trial_user_attributes WHERE trial_id >= 159;
+DELETE FROM trial_system_attributes WHERE trial_id >= 159;
+DELETE FROM trials WHERE trial_id >= 159;
+
+COMMIT;
+
+-- 外部キー制約を再有効化
+PRAGMA foreign_keys = ON;

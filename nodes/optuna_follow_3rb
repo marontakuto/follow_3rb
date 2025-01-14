@@ -17,11 +17,21 @@ from optuna.samplers import TPESampler
 from optuna.trial import TrialState
 
 import sqlite3
+import pandas as pd
 
 
 class Select: # Optunaのパラメータを管理するデータベースを操作
     def __init__(self):
-        self.db_path = os.path.dirname(os.path.realpath(__file__)) + "/score/to_main.db"
+        # データベースで扱う変数名
+        self.parameters = [
+            'network', 'conv_num', 'mid_layer_num', 'mid_units1', 'mid_units2', 
+            'mid_units3', 'cnv_act', 'ful_act', 'optimizer', 'batch_size', 
+            'r_collision', 'r_near', 'r_center', 'r_just', 
+            'distance', 'past_step', 'trials', 'trial_size', 'start_trial'
+            ]
+
+        # データベース名の定義
+        self.db_path = os.path.dirname(os.path.realpath(__file__)) + "/result/to_main.db"
         directory = os.path.dirname(self.db_path)
         if not os.path.exists(directory): # ディレクトリが存在しない場合は作成
             os.makedirs(directory)
@@ -39,138 +49,85 @@ class Select: # Optunaのパラメータを管理するデータベースを操�
         ''')
         self.conn.commit()
 
-        if os.path.exists(self.db_path): # 既存の値をクリア
+        # データベースファイルが存在していれば既存の値をクリア
+        if os.path.exists(self.db_path):
             self.clear_all_values()
-
-    def choice_param(self, trial, trials, parameters, Target, trial_size): # Optunaのパラメータ選択
-
-        network='DCNN' # CNN or DCNN or MLP
-
-        if network == 'CNN':
-            if Target=='both' or Target=='network':
-                #畳み込み層,プーリング層の組み合わせを選択
-                conv_num = trial.suggest_categorical('conv_num', [1, 2, 3])
-
-                # 中間層数とユニット数の選択
-                mid_layer_num = trial.suggest_categorical('mid_layer_num', [1, 2, 3])
-                if mid_layer_num == 1:
-                    mid_units1 = int(trial.suggest_float("mid_units1", 50, 800, step=50))
-                    mid_units2 = None
-                    mid_units3 = None
-                elif mid_layer_num == 2:
-                    mid_units1 = int(trial.suggest_float("mid_units1", 400, 800, step=50))
-                    mid_units2 = int(trial.suggest_float("mid_units2", 50, 600, step=50))
-                    mid_units3 = None
-                elif mid_layer_num == 3:
-                    mid_units1 = int(trial.suggest_float("mid_units1", 400, 800, step=50))
-                    mid_units3 = int(trial.suggest_float("mid_units3", 400, 800, step=50))
-                    mid_units2 = int(trial.suggest_float("mid_units2", 50, 500, step=50))
-            else:
-                conv_num = None
-                mid_layer_num = None
-                mid_units1 = None
-                mid_units2 = None
-                mid_units3 = None
         
-        if network == 'DCNN':
-            if Target=='both' or Target=='network':
-                #畳み込み層,プーリング層の組み合わせを選択
-                conv_num = trial.suggest_categorical('conv_num', [1, 2, 3])
-
-                # 中間層数とユニット数の選択
-                mid_layer_num = trial.suggest_categorical('mid_layer_num', [1, 2, 3])
-                if mid_layer_num == 1:
-                    mid_units1 = int(trial.suggest_float("mid_units1", 50, 800, step=1))
-                    mid_units2 = None
-                    mid_units3 = None
-                elif mid_layer_num == 2:
-                    mid_units1 = int(trial.suggest_float("mid_units1", 300, 800, step=1))
-                    mid_units2 = int(trial.suggest_float("mid_units2", 50, 600, step=1))
-                    mid_units3 = None
-                elif mid_layer_num == 3:
-                    mid_units1 = int(trial.suggest_float("mid_units1", 300, 800, step=1))
-                    mid_units3 = int(trial.suggest_float("mid_units3", 300, 800, step=1))
-                    mid_units2 = int(trial.suggest_float("mid_units2", 50, 500, step=1))
-            else:
-                conv_num = None
-                mid_layer_num = None
-                mid_units1 = None
-                mid_units2 = None
-                mid_units3 = None
-
-        if network == 'MLP':
-            if Target=='both' or Target=='network':
-                conv_num = None
-                # 中間層数とユニット数の選択
-                mid_layer_num = trial.suggest_categorical('mid_layer_num', [1, 2, 3])
-                if mid_layer_num == 1:
-                    mid_units1 = int(trial.suggest_float("mid_units1", 50, 850, step=100))
-                    mid_units2 = None
-                    mid_units3 = None
-                elif mid_layer_num == 2:
-                    mid_units1 = int(trial.suggest_float("mid_units1", 400, 800, step=100))
-                    mid_units2 = int(trial.suggest_float("mid_units2", 50, 650, step=100))
-                    mid_units3 = None
-                elif mid_layer_num == 3:
-                    mid_units1 = int(trial.suggest_float("mid_units1", 400, 800, step=100))
-                    mid_units3 = int(trial.suggest_float("mid_units3", 400, 800, step=100))
-                    mid_units2 = int(trial.suggest_float("mid_units2", 50, 850, step=100))
-            else:
-                conv_num = None
-                mid_layer_num = None
-                mid_units1 = None
-                mid_units2 = None
-                mid_units3 = None
-
-        # fully-connected layerとconvolutionの活性化関数の選択
-        if Target == 'both' or Target == 'network':
-            if network == 'CNN' or network == 'DCNN':
-                # cnv_act_name = trial.suggest_categorical('activation_cnv', ['F.relu', 'F.elu', 'F.selu', 'F.l_relu'])
-                cnv_act = 'F.relu'
-            # ful_act_name = trial.suggest_categorical('activation_ful', ['F.relu', 'F.elu', 'F.selu', 'F.l_relu'])
-            ful_act = 'F.relu'
-        else:
-            cnv_act = None
-            ful_act = None
-
-        # 最適化アルゴリズムの選択
-        if Target == 'both' or Target == 'network':
-            # optimizer_names = ['RAdam', 'Adagrad', 'Adadelta', 'RMSprop']
-            # optimizer = trial.suggest_categorical('optimizer', optimizer_names)
-            optimizer = 'RAdam'
-        else:
-            optimizer = 'RAdam'
-
-        # バッチサイズの選択
-        if Target == 'both' or Target == 'network':
-            # batch_size = trial.suggest_categorical("batch_size",[8, 16, 32, 64, 128])
-            batch_size = 128
-        else:
-            batch_size = 128
-
-        # 報酬の選択
-        if Target == 'both' or Target == 'reward':
-            r_collision = trial.suggest_float("r_collision", 10, 1000, step=10)
-            r_near = trial.suggest_float("r_near", 1, 100, step=1)
-            r_center = trial.suggest_float("r_center", 1, 100, step=1)
-            r_just = trial.suggest_float("r_just", 10, 1000, step=10)
-        else:
-            r_collision = None
-            r_near = None
-            r_center = None
-            r_just = None
-        
-        for name in parameters:
-            self.set_parameter_value(name, locals()[name])
-    
-    # パラメータの初期化関数
-    def initialize_parameters(self, param_names):
-        for param_name in param_names:
+        # パラメータの初期化関数
+        for param_name in self.parameters:
             self.cursor.execute('''
             INSERT OR IGNORE INTO to_main (name)
             VALUES (?)
             ''', (param_name,))
         self.conn.commit()
+
+    def choice_param(self, trial, trials, trial_size, start_trial): # Optunaのパラメータ選択
+
+        network = 'DCNN' # CNN or DCNN or MLP
+        
+        if network in ['CNN', 'DCNN']:
+            #畳み込み層,プーリング層の組み合わせを選択
+            conv_num = trial.suggest_categorical('conv_num', [1, 2, 3])
+
+        # 中間層数とユニット数の選択
+        mid_layer_num = trial.suggest_categorical('mid_layer_num', [1, 2, 3])
+        if mid_layer_num == 1:
+            mid_units1 = int(trial.suggest_float("mid_units1", 50, 800, step=1))
+            mid_units2 = None
+            mid_units3 = None
+        elif mid_layer_num == 2:
+            mid_units1 = int(trial.suggest_float("mid_units1", 300, 800, step=1))
+            mid_units2 = int(trial.suggest_float("mid_units2", 50, 600, step=1))
+            mid_units3 = None
+        elif mid_layer_num == 3:
+            mid_units1 = int(trial.suggest_float("mid_units1", 300, 800, step=1))
+            mid_units3 = int(trial.suggest_float("mid_units3", 300, 800, step=1))
+            mid_units2 = int(trial.suggest_float("mid_units2", 50, 500, step=1))
+
+        # fully-connected layerとconvolutionの活性化関数の選択
+        if network in ['CNN', 'DCNN']:
+            # cnv_act_name = trial.suggest_categorical('activation_cnv', ['F.relu', 'F.elu', 'F.selu', 'F.l_relu'])
+            cnv_act = 'F.relu'
+        # ful_act_name = trial.suggest_categorical('activation_ful', ['F.relu', 'F.elu', 'F.selu', 'F.l_relu'])
+        ful_act = 'F.relu'
+
+        # 最適化アルゴリズムの選択
+        # optimizer = trial.suggest_categorical('optimizer', ['RAdam', 'Adagrad', 'Adadelta', 'RMSprop'])
+        optimizer = 'RAdam'
+
+        # バッチサイズの選択
+        # batch_size = trial.suggest_categorical("batch_size", [8, 16, 32, 64, 128])
+        batch_size = 128
+
+        # 報酬の選択
+        if True: # trial.suggest_categorical('r_collision_exis', [True, False])
+            r_collision = trial.suggest_float("r_collision", 10, 1000, step=10)
+        else:
+            r_collision = 0
+        if trial.suggest_categorical('r_near_exis', [True, False]):
+            r_near = trial.suggest_float("r_near", 1, 100, step=1)
+        else:
+            r_near = 0
+        if trial.suggest_categorical('r_center_exis', [True, False]):
+            r_center = trial.suggest_float("r_center", 1, 100, step=1)
+        else:
+            r_center = 0
+        if True: # trial.suggest_categorical('r_just_exis', [True, False])
+            r_just = trial.suggest_float("r_just", 10, 1000, step=10)
+        else:
+            r_just = 0
+        
+        # リカバリー方策のしきい値(距離[m])
+        if trial.suggest_categorical('distance_exis', [True, False]):
+            distance = trial.suggest_float("distance", 0.16, 0.3, step=0.001)
+        else:
+            distance = 0.0
+        
+        past_step = trial.suggest_categorical('past_step', [0, 1, 2])
+        
+        # データベースに選択したパラメータを格納する
+        for name in self.parameters:
+            self.set_parameter_value(name, locals()[name])
 
     # 値の設定
     def set_parameter_value(self, name, value):
@@ -248,84 +205,71 @@ class DynamicGammaTPE(TPESampler): # 上位群の割合を変動させるTPE
         return ret
 
 
-class Visual: # Optunaの可視化
+class VisualOptuna: # Optunaの可視化
     def __init__(self):
         self.to_trial = 10 # 何トライアルごとにグラフを作成するか
         self.initial_trial = 50 # 何トライアル目からグラフを作成するか
         self.png = True # 画像として保存するか
         self.html = False # HTMLとして保存するか
+
+        # 単一目的(種類: 'history', 'slice', 'importances', 'coordinate', 'contour')
+        self.graph_type_single = ['history', 'slice', 'importances'] # 作成するグラフの種類
+
+        # 多目的(種類: 'pareto', 'slice1', 'slice2')
+        self.graph_type_multi = ['pareto', 'slice1', 'slice2'] # 作成するグラフの種類
+
+        self.dir_path = os.path.dirname(os.path.realpath(__file__))
     
-    def v1(self, trials): # 単一目的
-        if trials + 1 % self.to_trial == 0 and trials + 1 >= self.initial_trial:
-            print ('save graph')
+    def create_graph_single(self, trials): # 単一目的
+        if (trials + 1) % self.to_trial == 0 and (trials + 1) >= self.initial_trial:
+            print ('Start creating graph')
 
             dt = datetime.now()
-            f_score_file =  os.path.dirname(os.path.realpath(__file__)) + '/score/'
-            dtstr = dt.strftime('%d_%H:%M')
+            dtstr = dt.strftime('%m-%d_%H[h]%M[m]%S[s]')
+            f_score_file = self.dir_path + '/result/' + str(trials) + 'trial_' + dtstr
 
-            # グラフの作成
-            fig = optuna.visualization.plot_optimization_history(study) # 全トライアルのスコアとベストスコア
-            if self.png:
-                fig.write_image(f_score_file + dtstr + '_' + str(trials) + 'trial_history.png')
-            if self.html:
-                fig.write_html(f_score_file + dtstr + '_' + str(trials) + 'trial_history.html')
-
-            fig = optuna.visualization.plot_slice(study) # パラメータのどの値を重点的に探索しているか
-            if self.png:
-                fig.write_image(f_score_file + dtstr + '_' + str(trials) + 'trial_slice.png')
-            if self.html:
-                fig.write_html(f_score_file + dtstr + '_' + str(trials) + 'trial_slice.html')
-
-            fig = optuna.visualization.plot_param_importances(study) # 各パラメータがscore向上にどれだけ効いたか
-            if self.png:
-                fig.write_image(f_score_file + dtstr + '_' + str(trials) + 'trial_importances.png')
-            if self.html:
-                fig.write_html(f_score_file + dtstr + '_' + str(trials) + 'trial_importances.html')
-
-            # fig = optuna.visualization.plot_parallel_coordinate(study) # scoreが高いパラメータの組み合わせ
-            # if self.png:
-            #     fig.write_image(f_score_file + dtstr + '_' + str(trials) + 'trial_coordinate.png')
-            # if self.html:
-            #     fig.write_html(f_score_file + dtstr + '_' + str(trials) + 'trial_coordinate.html')
-
-            # fig = optuna.visualization.plot_contour(study) # 各2変数の組み合わせでそれぞれの値がどれだけ効くか
-            # if self.png:
-            #     fig.write_image(f_score_file + dtstr + '_' + str(trials) + 'trial_contour.png')
-            # if self.html:
-            #     fig.write_html(f_score_file + dtstr + '_' + str(trials) + 'trial_contour.html')
+            # グラフの作成と保存
+            history = optuna.visualization.plot_optimization_history(study) # 全トライアルのスコアとベストスコア
+            slice = optuna.visualization.plot_slice(study) # パラメータのどの値を重点的に探索しているか
+            importances = optuna.visualization.plot_param_importances(study) # 各パラメータがscore向上にどれだけ効いたか
+            coordinate = optuna.visualization.plot_parallel_coordinate(study) # scoreが高いパラメータの組み合わせ
+            contour = optuna.visualization.plot_contour(study) # 各2変数の組み合わせでそれぞれの値がどれだけ効くか
+            for graph_type in self.graph_type_single:
+                if self.png:
+                    locals()[graph_type].write_image(f_score_file + '_' + str(graph_type) + '.png')
+                if self.html:
+                    locals()[graph_type].write_html(f_score_file + '_' + str(graph_type) + '.html')
+            
+            print ('Finish creating graph')
     
-    def v2(self, trials): # 2目的
-        if trials + 1 % self.to_trial == 0 and trials + 1 >= self.initial_trial:
-            print ('save graph')
+    def create_graph_multi(self, trials): # 多目的
+        if (trials + 1) % self.to_trial == 0 and (trials + 1) >= self.initial_trial:
+            print ('Start creating graph')
 
             dt = datetime.now()
-            f_score_file =  os.path.dirname(os.path.realpath(__file__)) + '/score/'
-            dtstr = dt.strftime('%d_%H:%M')
+            dtstr = dt.strftime('%m-%d_%H[h]%M[m]%S[s]')
+            f_score_file =  os.path.dirname(os.path.realpath(__file__)) + '/result/' + str(trials) + 'trial_' + dtstr
 
-            # グラフの作成
-            fig = optuna.visualization.plot_pareto_front(study,include_dominated_trials=True)
-            if self.png:
-                fig.write_image(f_score_file + dtstr+'_'+str(trials)+'trial_pareto_front.png')
-            if self.html:
-                fig.write_html(f_score_file + dtstr + '_' + str(trials) + 'trial_pareto_front.html')
-
-            fig = optuna.visualization.plot_slice(study,target=lambda t: t.values[0])
-            if self.png:
-                fig.write_image(f_score_file + dtstr+'_'+str(trials)+'trial_plot_slice1.png')
-            if self.html:
-                fig.write_html(f_score_file + dtstr + '_' + str(trials) + 'trial_plot_slice1.html')
-
-            fig = optuna.visualization.plot_slice(study,target=lambda t: t.values[1])
-            if self.png:
-                fig.write_image(f_score_file + dtstr+'_'+str(trials)+'trial_plot_slice2.png')
-            if self.html:
-                fig.write_html(f_score_file + dtstr + '_' + str(trials) + 'trial_plot_slice2.html')
+            # グラフの作成と保存
+            pareto = optuna.visualization.plot_pareto_front(study,include_dominated_trials=True)
+            slice1 = optuna.visualization.plot_slice(study,target=lambda t: t.values[0])
+            slice2 = optuna.visualization.plot_slice(study,target=lambda t: t.values[1])
+            for graph_type in self.graph_type_multi:
+                if self.png:
+                    locals()[graph_type].write_image(f_score_file + '_' + str(graph_type) + '.png')
+                if self.html:
+                    locals()[graph_type].write_html(f_score_file + '_' + str(graph_type) + '.html')
+            
+            print ('Finish creating graph')
 
 
-class SQL: # 各ノードでのパラメータの評価を参照するためのデータベースを操作
+class Result: # 各ノードでのパラメータの評価を参照するためのデータベースを操作
     def __init__(self):
+        # 変数定義
+        self.robot_num = 3 # ロボットの数
+
         # データベースとテーブルを準備
-        self.db_path = os.path.dirname(os.path.realpath(__file__)) + "/score/to_optuna.db"
+        self.db_path = os.path.dirname(os.path.realpath(__file__)) + "/result/to_optuna.db"
         directory = os.path.dirname(self.db_path)
         if os.path.exists(self.db_path):
             self.clear_data()
@@ -336,20 +280,23 @@ class SQL: # 各ノードでのパラメータの評価を参照するための�
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS to_optuna (
                 process_id INTEGER,
-                data TEXT
+                data INTEGER,
+                episode INTEGER
             )
         """)
         conn.commit()
         conn.close()
-
-    # 3つノードから3つのデータが揃っているか確認
-    def check_data_ready(self):
+    
+    # 各ノードからいくつのデータを扱うか確認
+    def check_data_num(self):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT process_id, COUNT(*) as count FROM to_optuna GROUP BY process_id")
+        cursor.execute("SELECT data FROM to_optuna WHERE process_id = ?", (999,))
         results = cursor.fetchall()
         conn.close()
-        if len(results) == 3 and all(count == 3 for _, count in results):
+        if len(results) == self.robot_num:
+            self.result_num = results[0][0]
+            self.clear_data()
             return True
         return False
 
@@ -360,95 +307,102 @@ class SQL: # 各ノードでのパラメータの評価を参照するための�
         cursor.execute("DELETE FROM to_optuna")
         conn.commit()
         conn.close()
-
+    
     # データの参照
-    def pick_data(self):
+    def pick_data(self, column='*', robot='IS NOT NULL', episode='IS NOT NULL'):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM to_optuna")
+        query = (
+            f"SELECT {column} "
+            f"FROM to_optuna "
+            f"WHERE process_id {robot} "
+            f"AND episode {episode}"
+        )
+        cursor.execute(query)
         data = cursor.fetchall()
         conn.close()
         return data
 
 
+class Recode: # 記録ファイルの操作
+    def __init__(self):
+        dt = datetime.now() # 現在時刻の取得
+        dtstr = dt.strftime('%m_%d_%H:%M:%S')
+        file = os.path.dirname(os.path.realpath(__file__)) + '/result/' # os.path.dirname(os.path.realpath(__file__)) ← カレントディレクトリのパス
+        self.name = file + "goal_3rb_" + dtstr + "_optuna.xlsx"
+        if not os.path.exists(file):
+            os.makedirs(file)
+        columns = ['trials', 'episodes', 'robot0', 'robot1', 'robot2', 'average']
+        df = pd.DataFrame(columns=columns)
+        df.to_excel(self.name, index=False)
+    
+    def excel(self, data, columns): # Excelファイルへの追記
+        data = pd.DataFrame(data, columns=columns)
+        df = pd.read_excel(self.name)
+        df = pd.concat([df, data], ignore_index=True)
+        df.to_excel(self.name, index=False)
+
+
 def main(trial):
 
-    trials = len(study.trials) - 1
+    # トライアル数を定義(0から始まる)
+    trials = trial.number
     print('\ntrial ' + str(trials) + ' start')
 
-    select = Select()
-    parameters = ['network', 'conv_num', 'mid_layer_num', 'mid_units1', 'mid_units2', 
-                  'mid_units3', 'cnv_act', 'ful_act', 'optimizer', 'batch_size', 
-                  'r_collision', 'r_near', 'r_center', 'r_just', 'Target', 'trials', 'trial_size']
-    select.initialize_parameters(parameters)
-    select.choice_param(trial, trials, parameters, Target, trial_size)
+    select.choice_param(trial, trials, trial_size, start_trial) # Optunaによるパラメータの選択
 
-    print('params = ' + str(study.trials[-1].params))
+    print('params = ' + str(study.trials[-1].params)) # Optunaが選択したパラメータの出力
 
-    while True: # 結果が格納されるまで待機
-        if sql.check_data_ready:
+    while True: # 扱う結果の数が格納されるまで待機
+        if sql.check_data_num():
             break
         time.sleep(1)
     
-    while True: # 結果が反映されるまで待機
-        if len(sql.pick_data()) == 9: # len(sql.pick_data()) == ロボットの台数 * 3
+    while True: # すべての結果が反映されるまでデータを参照
+        if len(sql.pick_data()) == sql.robot_num * sql.result_num:
             break
         time.sleep(1)
-    
-    data = sql.pick_data() # データの参照
+
+    # このトライアルのscoreを記録
+    data_ave_list = []
+    recode.excel([[''], [str(trials)]], ['trials'])
+    episode_size = sql.pick_data(column="MAX(episode)")[0][0]
+    for episode in range(episode_size - sql.result_num + 1, episode_size + 1):
+        data_0 = sql.pick_data(robot='=0', episode=f'={episode}')[0]
+        data_1 = sql.pick_data(robot='=1', episode=f'={episode}')[0]
+        data_2 = sql.pick_data(robot='=2', episode=f'={episode}')[0]
+        data_ave = round((data_0[1] + data_1[1] + data_2[1]) / 3, 2)
+        data_ave_list.append(data_ave)
+        if data_ave == max(data_ave_list):
+            max_episode = episode
+            score_max = data_ave
+
+        data = [[str(episode), str(data_0[1]), str(data_1[1]), str(data_2[1]), str(data_ave)]]
+        columns = ['episodes', 'robot0', 'robot1', 'robot2', 'average']
+        data = pd.DataFrame(data, columns=columns)
+        recode.excel(data, columns)
     sql.clear_data() # データベースの初期化
-
-    score_rb0_list = []
-    score_rb1_list = []
-    score_rb2_list = []
-
-    for row in data:
-        locals()[f"score_rb{row[0]}_list"].append(float(row[1])) # 各ロボットのscoreリストに結果を格納
-
-    score_1st_last_list = [score_rb0_list[0], score_rb1_list[0], score_rb2_list[0]]
-    score_2nd_last_list = [score_rb0_list[1], score_rb1_list[1], score_rb2_list[1]]
-    score_3rd_last_list = [score_rb0_list[2], score_rb1_list[2], score_rb2_list[2]]
-    
-    score_1st_last_ave = round(sum(score_1st_last_list) / len(score_1st_last_list), 2)
-    score_2nd_last_ave = round(sum(score_2nd_last_list) / len(score_2nd_last_list), 2)
-    score_3rd_last_ave = round(sum(score_3rd_last_list) / len(score_3rd_last_list), 2)
-    score_ave_list = [score_1st_last_ave, score_2nd_last_ave, score_3rd_last_ave]
-
-    # Optuna評価値とするスコアを決定
-    max_index = score_ave_list.index(max(score_ave_list))
-    if max_index == 0:
-        optuna_select = "score_1st_last"
-    elif max_index == 1:
-        optuna_select = "score_2nd_last"
-    elif max_index == 2:
-        optuna_select = "score_3rd_last"
-    score_list_ave = score_ave_list[max_index]
-    
-    print('score_list = ' + str(score_list_ave) + ', select = ' + str(optuna_select))
+    print('score_list = ' + str(score_max) + ', episode = ' + str(max_episode))
 
     # Optunaの記録
     if trials == 0:
-        o = 0
-    elif study.best_trial.value <= score_list_ave:
-        o = trials
+        best_trial_num = 0
+    elif study.best_trial.value < score_max:
+        best_trial_num = trials
     else:
-        o = study.best_trial.number
+        best_trial_num = study.best_trial.number
     text = [
         "TRIAL: " + str(trials) + "\n", 
         "parameter: " + str(study.trials[-1].params) + "\n", 
-        "robot_list: " + str([0, 1, 2]) + "\n", 
-        "score_1st_last: " + str([round(num, 2) for num in score_1st_last_list]) + " average: " + str(score_1st_last_ave) + "\n", 
-        "score_2nd_last: " + str([round(num, 2) for num in score_2nd_last_list]) + " average: " + str(score_2nd_last_ave) + "\n", 
-        "score_3rd_last: " + str([round(num, 2) for num in score_3rd_last_list]) + " average: " + str(score_3rd_last_ave) + "\n", 
-        "select: " + optuna_select + " score: " + str(score_list_ave) + "\n", 
-        "best_trial: " + str(o) + "\n\n"
+        "select episode: " + str(max_episode) + "\n", 
+        "score: " + str(score_max) + "\n", 
+        "best_trial: " + str(best_trial_num) + "\n\n"
     ]
-    with open(f_learning_name, 'a') as f: # ファイルにテキストを書き込む
+    with open(f_optuna_name, 'a') as f: # ファイルにテキストを書き込む
         f.writelines(text)
 
     # グラフの作成
-    visual = Visual()
-    visual.v1(trials)
+    visual.create_graph_single(trials)
     
     # パラメータファイルの削除(トライアル数が多い場合は必須)
     try:
@@ -458,31 +412,47 @@ def main(trial):
     except:
         pass
 
-    return round(score_list_ave, 2)
+    return score_max
 
 
 if __name__ == '__main__':
     
     rospy.init_node('optuna_follow_3rb')
 
-    sql = SQL()
+    sql = Result()
+    visual = VisualOptuna()
+    select = Select()
+    recode = Recode()
 
     optuna_db_name = 'optuna' # データベースの名前
-    optuna_db_path = 'sqlite:///' + os.path.dirname(os.path.realpath(__file__)) + '/score/optuna.db' # データベースの保存場所
+    optuna_db_path = 'sqlite:///' + os.path.dirname(os.path.realpath(__file__)) + '/result/optuna.db' # データベースの保存場所
 
     ### Optunaの設定 ###########
-    trial_size = 20 # 実行するトライアル数
-    Target = 'both' # 'both' or 'network' or 'reward'
-    save_study = False # Optunaの内容をデータベースに保存
+    trial_size = 30 # 実行するトライアル数
+    save_study = True # Optunaの内容をデータベースに保存
     load_study = False # 前回のOptunaの内容を引き継ぐ
     shutdown = True # プログラム終了時にPCの電源を落とすか否か
-    fix = True # 初期トライアルのパラメータ値の固定(study.optimizeの直前でstudy.enqueue_trialを用いて追加してください)
-    choice_param_only = True # 指定したパラメータのみを用いる
+    fix = False # 初期トライアルのパラメータ値の固定(study.optimizeの直前でstudy.enqueue_trialを用いて追加してください)
+    choice_param_only = False # 指定したパラメータのみを用いる
+    trial_size_choice = 1 # 指定したパラメータでの試行回数(1つの組み合わせあたり)
+
+    # 指定するパラメータの設定
+    choice_params = [
+        {'conv_num': 3, 'mid_layer_num': 3, 'mid_units1': 315.0, 'mid_units3': 659.0, 'mid_units2': 96.0, 
+         'r_collision': 1890.0, 'r_near_exis': True, 'r_near': 1.9, 'r_center_exis': True, 'r_center': 0.36, 
+         'r_just': 0.36, 
+         'distance_exis': True, 'distance': 0.18, 'past_step': 2}
+    ]
+    
+    """ 上位群の割合を減少させるTPE(initial_gamma: 最初の上位群の割合, 
+        final_gamma: 減少後の上位群の割合, stop_trial: 割合減少を止めるトライアル, random_trials: ランダムサーチのトライアル数) """
+    sampler = DynamicGammaTPE(initial_gamma=0.7, final_gamma=0.1, stop_trial=50, random_trials=10)
     ############################
     
-    """ 上位群の割合を減少させるTPE(initial_gamma: 最初の上位群の割合, final_gamma: 減少後の上位群の割合, stop_trial: 割合減少を止めるトライアル, random_trials: ランダムサーチのトライアル数) """
-    sampler = DynamicGammaTPE(initial_gamma=0.7, final_gamma=0.1, stop_trial=50, random_trials=10)
+    if choice_param_only:
+        trial_size = trial_size_choice * len(choice_params)
 
+    # Optunaの設定を定義
     if load_study:
         study = optuna.load_study(study_name=optuna_db_name, storage=optuna_db_path, sampler=sampler)
     elif save_study:
@@ -490,43 +460,48 @@ if __name__ == '__main__':
     else:
         study = optuna.create_study(sampler=sampler, direction='maximize')
     
-    #########記録ファイル作成########################################################
+    # Optunaの記録ファイル作成
     dt = datetime.now() # 現在時刻の取得
-    dtstr = dt.strftime('%m_%d_%H:%M:%S') # y(year), m(month), d(day), H(hour), M(minute), S(second)
-    f_learning_file =  os.path.dirname(os.path.realpath(__file__)) + '/score/' # os.path.dirname(os.path.realpath(__file__)) ← カレントディレクトリのパス
-    f_learning_name = f_learning_file + 'optuna_' + dtstr + '.txt'
-    if not os.path.exists(f_learning_file):
-        os.makedirs(f_learning_file)
-    text = [
-        "trial_size: " + str(trial_size) + "\n",
-        "Target: " + Target + "\n\n"
-    ]
-    with open(f_learning_name, 'w') as f: # ファイルに属性を書き込む
+    dtstr = dt.strftime('%m-%d_%H[h]%M[m]%S[s]') # y(year), m(month), d(day), H(hour), M(minute), S(second)
+    f_optuna_file =  os.path.dirname(os.path.realpath(__file__)) + '/result/' # os.path.dirname(os.path.realpath(__file__)) ← カレントディレクトリのパス
+    f_optuna_name = f_optuna_file + 'optuna_' + dtstr + '.txt'
+    if not os.path.exists(f_optuna_file):
+        os.makedirs(f_optuna_file)
+    text = ["trial_size: " + str(trial_size) + "\n\n"]
+    with open(f_optuna_name, 'w') as f: # ファイルに属性を書き込む
         f.writelines(text)
-    ################################################################################
+    
+    # 最初のトライアル数
+    start_trial = len(study.trials)
 
     # 探索開始時間
     time_optuna = time.time()
 
     # 探索実行
     if choice_param_only: # 指定したパラメータのみを用いる
-        for i in range(trial_size):
-            study.enqueue_trial({'conv_num': 2, 'mid_layer_num': 2, 'mid_units1': 512, 'mid_units2': 512, 'r_collision': 1000, 'r_near': 10, 'r_center': 10, 'r_just': 100})
-            study.optimize(main, n_trials=1)
-    elif fix: # 初期値の固定
-        study.enqueue_trial({'conv_num': 2, 'mid_layer_num': 2, 'mid_units1': 512, 'mid_units2': 512, 'r_collision': 1000, 'r_near': 10, 'r_center': 10, 'r_just': 100})
+        for choice_param in choice_params:
+            for i in range(trial_size_choice):
+                study.enqueue_trial(choice_param)
+                study.optimize(main, n_trials=1)
+    elif fix and len(study.trials) == 0: # 初期値の固定
+        for choice_param in choice_params:
+            study.enqueue_trial(choice_param)
         study.optimize(main, n_trials=trial_size)
     else: # スタンダード
         study.optimize(main, n_trials=trial_size)
 
-    # 探索時間の取得と記録
+    # 探索時間の記録
     seconds = int(time.time() - time_optuna)
     m, s = divmod(seconds, 60)
     h, m = divmod(m, 60)
+    seconds_trial = int(seconds / trial_size)
+    m_trial, s_trial = divmod(seconds_trial, 60)
+    h_trial, m_trial = divmod(m_trial, 60)
     text = [
-        "time: " + str(seconds) + "[s], " + str(h) + ":" + str(m) + ":" + str(s) + "[hour:min:sec]"
+        "TOTAL> time: " + str(seconds) + "[s], " + str(h) + ":" + str(m) + ":" + str(s) + "[hour:min:sec]\n", 
+        "TRIAL> time: " + str(seconds_trial) + "[s], " + str(h_trial) + ":" + str(m_trial) + ":" + str(int(s_trial)) + "[hour:min:sec]"
     ]
-    with open(f_learning_name, 'a') as f:
+    with open(f_optuna_name, 'a') as f:
         f.writelines(text)
 
     # ベストパラメータ・スコアの表示

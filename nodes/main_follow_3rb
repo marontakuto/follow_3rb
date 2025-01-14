@@ -8,8 +8,6 @@ import os
 import numpy as np
 import pandas as pd
 import time
-import sys
-sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 from datetime import datetime
 import torch.nn.functional as F # 活性化関数
 import sqlite3
@@ -22,8 +20,7 @@ import net_follow_3rb # ネットワーク
 import greedy_follow_3rb # 探索手法
 
 class ReinforceAgent():
-    def __init__(self, network, conv_num, mid_layer_num, mid_units1, mid_units2, 
-                 mid_units3, cnv_act, ful_act, optimizer, batch_size, Target, trials):
+    def __init__(self):
 
         # モデルを保存するためのパス
         self.current_dirPath = os.path.dirname(os.path.realpath(__file__)) # カレントディレクトリのパス
@@ -34,16 +31,19 @@ class ReinforceAgent():
         self.mode = 'sim' # sim or real
         self.choice_model = False # dirPath/load_model/robot_n でテスト
 
-        self.save_model = False # 重みとリプレイバッファを保存するか
-        self.save_episode = 5 # (↑True時)重み保存を開始するエピソード
+        self.save_rbuf = False # リプレイバッファを保存するか(モデルは必ず保存されます)
         self.load_model = False # 保存した重みを適用するか
-        self.load_episode = 1 # (↑True時)適用する保存済重みのエピソード
-        self.load_rbuf = False
+        self.load_rbuf = False # 保存したリプレイバッファを適用するか
 
-        self.input_list = ['lidar', 'cam', 'previous_lidar', 'previous_cam', 'previous2_lidar', 'previous2_cam'] # 'lidar', 'cam', 'previous_cam', 'previous_lidar', 'previous2_lidar', 'previous2_cam'
-        self.net = network
+        self.input_lidar = True # LiDAR値をネットワークに入力するか否か
+        self.lidar_past_step = past_step # 何ステップ前までのLiDAR値をネットワークに入力するか
+        self.input_cam = True # カメラ画像をネットワークに入力するか否か
+        self.cam_past_step = past_step # 何ステップ前までのカメラ画像をネットワークに入力するか
+        self.cam_width = 48 # カメラ画像の横[pixel]
+        self.cam_height = 27 # カメラ画像の縦[pixel]
+        
         self.exploration = 'd_egreedy' # d_egreedy(decay_epsilon_greedy) or c_egreedy(constant_epsilon_greedy)
-        self.lidar_num = 36 # DQNに入力するlidarの方向数
+        self.lidar_num = 72 # DQNに入力するlidarの方向数(MAX: 360)
         self.action_size = 4 # 行動の種類数
         self.episode = 30 # 30
         self.eval_episode = 4 # 4
@@ -60,99 +60,63 @@ class ReinforceAgent():
         self.display_image_count = False # マスク処理した画像の表示
         self.display_rb = [2] # カメラ画像を出力するロボットの識別番号
         self.screen_list = [2] # 学習経過を出力するロボットの識別番号
-        self.recovery = False # リカバリー方策を適用するか否か
-        self.teleport = True # 衝突時は空いたスペースに再配置する
-        self.termination_e = 999 # ロボットがフィールド外の左側に存在したら強制終了を始めるエピソード(最初のエピソードから行っていると無駄な計算量が出る)
-        self.trial_restart = 999 # Optunaをロードして始めるトライアル
-        self.all_episode_test = True # すべてのエピソードをテスト
-        self.synchro = True # エピソードごとの同期の有無
-        if self.all_episode_test: # すべてのエピソードをテストする場合は必ず同期する
-            self.synchro = True
-        ########################
+        self.recovery = True # リカバリー方策を適用するか否か
+        self.teleport = True # 衝突時は空いたスペースに再配置するか否か
+        self.all_episode_test = False # すべてのエピソードをテスト
+        self.robot_coordinate_recode = False # テストでのロボットの座標の記録
+
+        # ### オプション有無の実験 ###
+        # if trials >= 9:
+        #     self.action_size = 6
+        #     self.recovery = True
+        # elif trials >= 6:
+        #     self.action_size = 4
+        #     self.recovery = True
+        # elif trials >= 3:
+        #     self.action_size = 5
+        #     self.recovery = True
+        # else:
+        #     self.action_size = 6
+        #     self.recovery = True
+        # ############################
 
         #######################################################################################
 
-        # ロボットの番号割振り
-        self.robot_n = rospy.get_param('robot_num') # 0~3:multi, 99:solo
-        if self.robot_n == 99: # solo
-            self.robot_n = 1
+        # ロボットの番号割振り(launchファイルの「<param name="robot_num"  value="ここ"/>」から値を参照)
+        self.robot_n = rospy.get_param('robot_num')
         
         if self.gpu == 0: # GPU設定
             torch.set_default_dtype(torch.float32)
             torch.set_default_device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        if self.net == 'CNN':
-            self.n_added_input = 0
-            self.n_input_channels = 3
-            assert ('cam'in self.input_list) or ('previous_cam'in self.input_list) or ('previous2_cam'in self.input_list), 'cam not in input_list' 
-            if 'previous_cam' in self.input_list:
-                self.n_input_channels += 3
-            if 'previous2_cam' in self.input_list:
-                self.n_input_channels += 3
-            if ('lidar'in self.input_list) or ('previous_lidar'in self.input_list) or ('previous2_lidar'in self.input_list):
-                self.n_added_input += self.lidar_num
-                if 'previous_lidar' in self.input_list:
-                    self.n_added_input += self.lidar_num
-                if 'previous2_lidar' in self.input_list:
-                    self.n_added_input += self.lidar_num
-            
-            if Target=='both' or Target=='network':
-                self.q_func = net_follow_3rb.Q_Func_Optuna(conv_num,mid_layer_num,mid_units1,
-                    mid_units2,mid_units3,cnv_act,ful_act,
-                    n_actions=self.action_size, n_input_channels=self.n_input_channels, 
-                    n_added_input=self.n_added_input)
-            else:
-                self.q_func = net_follow_3rb.Q_Func(n_actions=self.action_size, 
-                n_input_channels=self.n_input_channels, n_added_input=self.n_added_input)
+        # ネットワークへの入力数の定義
+        self.n_added_input = 0
+        if self.input_cam: # カメラ画像
+            if network in ['CNN', 'DCNN']:
+                self.n_input_channels = 3 * (self.cam_past_step + 1)
+            elif network == 'MLP':
+                self.n_input = (self.cam_width * self.cam_height * 3) * (self.cam_past_step + 1)
+        if self.input_lidar: # LiDAR
+            self.n_added_input = self.lidar_num * (self.lidar_past_step + 1)
         
-        if self.net == 'DCNN':
-            self.n_added_input = 0
-            self.n_input_channels = 3
-            assert ('cam'in self.input_list) or ('previous_cam'in self.input_list) or ('previous2_cam'in self.input_list), 'cam not in input_list' 
-            if 'previous_cam' in self.input_list:
-                self.n_input_channels += 3
-            if 'previous2_cam' in self.input_list:
-                self.n_input_channels += 3
-            if ('lidar'in self.input_list) or ('previous_lidar'in self.input_list) or ('previous2_lidar'in self.input_list):
-                self.n_added_input += self.lidar_num
-                if 'previous_lidar' in self.input_list:
-                    self.n_added_input += self.lidar_num
-                if 'previous2_lidar' in self.input_list:
-                    self.n_added_input += self.lidar_num
+        # ネットワークモデルを定義
+        if network == 'CNN':
+            self.q_func = net_follow_3rb.Q_Func_Optuna(
+                conv_num, mid_layer_num, mid_units1, mid_units2,mid_units3,cnv_act,ful_act,
+                n_actions=self.action_size, n_input_channels=self.n_input_channels, 
+                n_added_input=self.n_added_input, img_width=self.cam_width, img_height=self.cam_height)
+        elif network == 'DCNN':
+            self.q_func = net_follow_3rb.Dueling_Q_Func_Optuna(
+                conv_num, mid_layer_num, mid_units1, mid_units2, mid_units3, cnv_act, ful_act,
+                n_actions=self.action_size, n_input_channels=self.n_input_channels, 
+                n_added_input=self.n_added_input, img_width=self.cam_width, img_height=self.cam_height
+            )
+        elif network == 'MLP':
+            self.q_func = net_follow_3rb.MLP_Optuna(
+                mid_layer_num, mid_units1, mid_units2, mid_units3, ful_act, 
+                n_actions=self.action_size, n_input=self.n_input, n_added_input=self.n_added_input)
 
-            if Target == 'both' or Target == 'network':
-                self.q_func = net_follow_3rb.Dueling_Q_Func_Optuna(
-                    conv_num, mid_layer_num, mid_units1, mid_units2, mid_units3, cnv_act, ful_act,
-                    n_actions=self.action_size, n_input_channels=self.n_input_channels, n_added_input=self.n_added_input
-                )
-            else:
-                self.q_func = net_follow_3rb.Dueling_Q_Func(
-                    n_actions=self.action_size, n_input_channels=self.n_input_channels, n_added_input=self.n_added_input
-                )
-
-        if self.net == 'MLP':
-            self.n_input = 0
-            self.n_added_input = 0
-            if ('cam'in self.input_list) or ('previous_cam'in self.input_list):
-                self.n_input = 1296*3
-                if 'previous_cam' in self.input_list:
-                    self.n_input += 1296*3
-                if 'previous2_cam' in self.input_list:
-                    self.n_input += 1296*3
-            if ('lidar'in self.input_list) or ('previous_lidar'in self.input_list):
-                self.n_added_input += self.lidar_num
-                if 'previous_lidar' in self.input_list:
-                    self.n_added_input += self.lidar_num
-                if 'previous2_lidar' in self.input_list:
-                    self.n_added_input += self.lidar_num
-            
-            if Target == 'both' or Target == 'network':
-                self.q_func = net_follow_3rb.MLP_Optuna(
-                    mid_layer_num, mid_units1, mid_units2, mid_units3, ful_act, 
-                    n_actions=self.action_size, n_input=self.n_input, n_added_input=self.n_added_input)
-            else:
-                self.q_func = net_follow_3rb.MLP(n_actions=self.action_size, n_input=self.n_input, n_added_input=self.n_added_input)
-
+        # 最適化アルゴリズムの設定
         if optimizer == 'SGD':
             self.optimizer = torch.optim.SGD(self.q_func.parameters(), momentum=0)
         elif optimizer == 'MomentumSGD':
@@ -174,6 +138,7 @@ class ReinforceAgent():
         elif optimizer == 'RAdam':
             self.optimizer = torch.optim.RAdam(self.q_func.parameters())
 
+        # イプシロングリーディー法の設定
         if self.exploration == 'd_egreedy': # εが減衰
             self.explorer = greedy_follow_3rb.MyEpsilonGreedy(
                 start_epsilon = 0.1,
@@ -192,9 +157,11 @@ class ReinforceAgent():
                 replay_start_size = self.replay_start_size, # 初期探索あり
                 action_size = self.action_size
             )
-            
+        
+        # リプレイバッファの設定
         self.rbuf = pfrl.replay_buffers.ReplayBuffer(capacity=10 ** 5, num_steps=self.multistep)
 
+        # 学習モデルを定義
         self.model = pfrl.agents.DoubleDQN(
             self.q_func, optimizer=self.optimizer, replay_buffer=self.rbuf, 
             gamma=self.discount_factor, explorer=self.explorer, 
@@ -202,13 +169,6 @@ class ReinforceAgent():
             minibatch_size=batch_size, update_interval=1, 
             target_update_interval=self.target_update, n_times_update=1
         )
-
-    # Excelファイルへの追記
-    def excel(self, data, columns, file_name):
-        data = pd.DataFrame(data, columns=columns)
-        df = pd.read_excel(file_name)
-        df = pd.concat([df, data], ignore_index=True)
-        df.to_excel(file_name, index=False)
 
     # 学習
     def train(self):
@@ -233,7 +193,6 @@ class ReinforceAgent():
         color_list = []
 
         collision = False
-        termination = False
 
         for e in range(1, self.episode + 1):
 
@@ -254,7 +213,7 @@ class ReinforceAgent():
                     action = env.recovery_change_action(e, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
                 #####################################
 
-                next_state, reward, color_num, just_count, collision, input_scan = env.step(action, test=False) # 行動、状態の観測、報酬の一連の処理
+                next_state, reward, color_num, just_count, collision = env.step(action, test=False) # 行動、状態の観測、報酬の一連の処理
                 next_state = torch.from_numpy(next_state).float()
                 self.model.observe(next_state, reward, collision, reset=False) # モデルの更新
 
@@ -284,7 +243,7 @@ class ReinforceAgent():
                     data = [[str(e), str(t), str(score), str(collisions), str(r_just_count), str(color_count), str(h) + ':' + str(m) + ':' + str(s)]]
                     columns = ['episodes', 'step', 'reward_sum', 'collisions', 'follow', 'color_num', 'time']
                     data = pd.DataFrame(data, columns=columns)
-                    self.excel(data, columns, f_train_name)
+                    excel(data, columns, f_train_name)
                     
                     # 各結果をリストへ格納
                     old_score.append(score)
@@ -293,33 +252,20 @@ class ReinforceAgent():
                     color_list.append(color_count)
 
                     break
-                
-                # 他のロボットがフィールド外に下側に存在する場合強制終了
-                if e >= self.termination_e and self.mode == 'sim':
-                    termination = env.area_judge(terms='soft', area='left')
-                    if termination:
-                        break
             
             # モデルの保存
-            if self.save_model and e >= self.save_episode:
-                self.model.save(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(e) + '/robot_' + str(self.robot_n))
-                self.rbuf.save(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(e) + '/robot_' + str(self.robot_n) + '/replay_buffer')
-            else:
-                self.model.save(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(e) + '/robot_' + str(self.robot_n))
-                # self.rbuf.save(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(e) + '/robot_' + str(self.robot_n) + '/replay_buffer')
+            if self.save_rbuf:
+                self.rbuf.save(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(e) + '/robot_' + str(self.robot_n) + '/replay_buffer') # リプレイバッファの保存
+            self.model.save(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(e) + '/robot_' + str(self.robot_n)) # モデルの保存
             
             # エピソードごとの同期(他ロボットが右のエリアにいることを確認することで同期を取る)
-            if self.synchro and e != self.episode:
+            if e != self.episode:
                 env.set_robot(102) # フィールド外の右側に配置
                 sync = False
                 while sync == False:
                     sync = env.area_judge(terms='hard', area='right')
                 time.sleep(0.5)
                 env.set_robot(0) # 初期位置に配置
-
-            # 学習中に強制終了の処置がされた場合
-            if termination:
-                break
 
         # 最高点の時の情報を取得
         best_episode = old_score.index(max(old_score)) + 1 # scoreが最大のエピソード
@@ -339,12 +285,12 @@ class ReinforceAgent():
             time.sleep(0.5)
         
         # テストに用いるエピソードモデルの選択
-        if e <= 2:
-            test_episodes = [e, e, e] # 学習を3エピソード以上行っていない場合は最後のエピソードを3回テスト
-        elif self.all_episode_test:
+        if self.all_episode_test:
             test_episodes = list(range(1, self.episode + 1)) # すべてのエピソードをテスト
+        elif self.episode < test_num:
+            test_episodes = [self.episode for _ in range(test_num)] # 最後のエピソードをtest_num回テスト
         else:
-            test_episodes = [e, e - 1, e - 2] # 最後のエピソードから1, 2, 3番目をテスト
+            test_episodes = list(range(self.episode - test_num + 1, self.episode + 1)) # 最後のtest_num個のエピソードをテスト
 
         return test_episodes
 
@@ -360,9 +306,12 @@ class ReinforceAgent():
         color_list = []
         step_list = []
 
+        if self.robot_coordinate_recode:
+            env.coordinate_file()
+
         start_time = time.time()
 
-        if test_e == 999: # 指定されたモデルのロード
+        if test_e >= 1000: # 指定されたモデルのロード
             self.model.load(self.dirPath + '/load_model/robot_' + str(self.robot_n))
         else: # 学習の内指定されたエピソードのロード
             self.model.load(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(test_e) + '/robot_' + str(self.robot_n))
@@ -398,7 +347,7 @@ class ReinforceAgent():
                         action = env.recovery_change_action(test_e, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
                     #####################################
 
-                    next_state, reward, color_num, just_count, collision, input_scan = env.step(action, test=True)
+                    next_state, reward, color_num, just_count, collision = env.step(action, test=True)
                     next_state = torch.from_numpy(next_state).float()
                     self.model.observe(next_state, reward, collision, reset=False)
 
@@ -412,6 +361,11 @@ class ReinforceAgent():
                         done = True
                     elif t == self.test_step:
                         done = True
+                    elif self.mode == 'sim': # 他ロボットが右のエリアにいることを確認することで同期を取る
+                        done = env.area_judge(terms='soft', area='upper')
+                    
+                    if self.robot_coordinate_recode:
+                        env.coordinate_get()
                     
                     if done:
                         # 時間を計算
@@ -427,11 +381,11 @@ class ReinforceAgent():
                         if eval_e == 1:
                             data = [[str(test_e)]]
                             columns = ['episodes']
-                            self.excel(data, columns, f_test_name)
+                            excel(data, columns, f_test_name)
                         data = [[str(t), str(score), str(collisions), str(r_just_count), str(color_count), str(h) + ':' + str(m) + ':' + str(s)]]
                         columns = ['step', 'reward_sum', 'collisions', 'follow', 'color_num', 'time']
                         data = pd.DataFrame(data, columns=columns)
-                        self.excel(data, columns, f_test_name)
+                        excel(data, columns, f_test_name)
 
                         # 結果を格納
                         old_score.append(score)
@@ -440,7 +394,13 @@ class ReinforceAgent():
                         color_list.append(color_count)
                         step_list.append(t)
 
-                        # 他ロボットが右のエリアにいることを確認することで同期を取る
+                        if self.robot_coordinate_recode:
+                            flag_last = False
+                            if eval_e == self.eval_episode:
+                                flag_last = True
+                            env.coordinate_recode(flag_last)
+
+                        # 他ロボットが上のエリアにいることを確認することで同期を取る
                         if self.mode == 'sim':
                             env.set_robot(105) # フィールド外の上側に配置
                             sync = False
@@ -458,6 +418,7 @@ class ReinforceAgent():
         r_just_count = sum(r_just_list) / len(r_just_list)
         color_count = sum(color_list) / len(color_list)
         step_count = sum(step_list) / len(step_list)
+        reward_ave = sum(old_score) / len(old_score)
 
         # ロボットの評価値を算出
         a = 0.8
@@ -471,10 +432,10 @@ class ReinforceAgent():
         print('finish test (robot' + str(self.robot_n) + ': score=' + str(round(score, 2)) + ', collision=' + str(round(collisions, 2)) + ', step=' + str(round(step_count, 2)) + ', follow=' + str(round(r_just_count, 2)) + ', color_num=' + str(round(color_count, 2)) + ', test_episode=' + str(test_e) + ')')
         
         # 評価の書き込み
-        data = [[str(test_e), str(step_count), str(collisions), str(r_just_count), str(color_count), str(score)]]
-        columns = ['episodes', 'step_ave', 'collisions_ave', 'follow_ave', 'color_num_ave', 'evaluation']
+        data = [[str(test_e), str(step_count), str(reward_ave), str(collisions), str(r_just_count), str(color_count), str(score)]]
+        columns = ['episodes', 'step_ave', 'reward_ave', 'collisions_ave', 'follow_ave', 'color_num_ave', 'evaluation']
         data = pd.DataFrame(data, columns=columns)
-        self.excel(data, columns, f_evaluate_name)
+        excel(data, columns, f_evaluate_name)
 
         # テストに用いたモデルをdirPath2に保存
         self.model.save(self.dirPath2 + '/TRIAL' + str(trials) + '/episode' + str(test_e) + '/robot_' + str(self.robot_n))
@@ -522,7 +483,7 @@ class ReinforceAgent():
                             action = env.recovery_change_action(1, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
                     #####################################
 
-                    next_state, reward, color_num, just_count, collision, input_scan = env.step(action, test=False)
+                    next_state, reward, color_num, just_count, collision = env.step(action, test=False)
                     next_state = torch.from_numpy(next_state).float()
                     self.model.observe(next_state, reward, collision, reset=False)
 
@@ -549,6 +510,13 @@ class ReinforceAgent():
                             step_total, score, collisions, r_just_count, color_count, h, m, s))
                         
                         break
+
+
+def excel(data, columns, file_name): # Excelファイルへの追記
+    data = pd.DataFrame(data, columns=columns)
+    df = pd.read_excel(file_name)
+    df = pd.concat([df, data], ignore_index=True)
+    df.to_excel(file_name, index=False)
 
 
 def get_value_by_name(name): # データベースの情報を適切な型に直して参照する
@@ -579,16 +547,53 @@ def get_value_by_name(name): # データベースの情報を適切な型に直�
 if __name__ == '__main__':
     rospy.init_node('main_follow_3rb')
 
+    ### ユーザーが設定するパラメータ ###
     training = True # 学習の有無
-    evaluation = True # テストの有無
+    evaluation = True # テストの有無(ここだけTrueにしたら自動的にロードしたモデルでテストになります)
     demonstration = False # デモンストレーションの有無
-    load_test_num = 3 # ロードしたモデルでテストする回数(training = False, evaluation = True の場合) ※3以上必須
+    test_num = 3 # テストする回数(training, evaluation, agent.all_episode_test が True の場合は agent.episode が定義されます)
+    ####################################
 
     # 実験開始時間の取得
     dt = datetime.now() # 現在時刻の取得
     dtstr = dt.strftime('%m_%d_%H:%M:%S') # y(year), m(month), d(day), H(hour), M(minute), S(second)
+    
+    robot_n = rospy.get_param('robot_num') # ロボットの番号割振り(launchファイルの「<param name="robot_num"  value="ここ"/>」から値を参照)
 
-    to_main_db_name = os.path.dirname(os.path.realpath(__file__)) + "/score/to_main.db"
+    # 記録ファイル作成
+    if training:
+        # 学習ファイル
+        f_train_file = os.path.dirname(os.path.realpath(__file__)) + '/result/' + str(robot_n) + '/'
+        f_train_name = f_train_file + str(robot_n) + "_follow_3rb_" + dtstr + "_train.xlsx"
+        # ディレクトリがない場合、作成する
+        if not os.path.exists(f_train_file):
+            os.makedirs(f_train_file)
+        columns = ['trials', 'episodes', 'step', 'reward_sum', 'collisions', 'follow', 'color_num', 'time']
+        df = pd.DataFrame(columns=columns)
+        df.to_excel(f_train_name, index=False)
+    if evaluation:
+        # テストファイル
+        f_test_file =  os.path.dirname(os.path.realpath(__file__)) + '/result/' + str(robot_n) + '/'
+        f_test_name = f_test_file + str(robot_n) + "_follow_3rb_" + dtstr + "_test.xlsx"
+        # ディレクトリがない場合、作成する
+        if not os.path.exists(f_test_file):
+            os.makedirs(f_test_file)
+        columns = ['trials', 'episodes', 'step', 'reward_sum', 'collisions', 'follow', 'color_num', 'time']
+        df = pd.DataFrame(columns=columns)
+        df.to_excel(f_test_name, index=False)
+
+        # 評価ファイル
+        f_evaluate_file =  os.path.dirname(os.path.realpath(__file__)) + '/result/' + str(robot_n) + '/'
+        f_evaluate_name = f_evaluate_file + str(robot_n) + "_follow_3rb_" + dtstr + "_evaluate.xlsx"
+        # ディレクトリがない場合、作成する
+        if not os.path.exists(f_evaluate_file):
+            os.makedirs(f_evaluate_file)
+        columns = ['trials', 'episodes', 'step_ave', 'reward_ave', 'collisions_ave', 'follow_ave', 'color_num_ave', 'evaluation']
+        df = pd.DataFrame(columns=columns)
+        df.to_excel(f_evaluate_name, index=False)
+
+    # パラメータを受け取るデータベース名
+    to_main_db_name = os.path.dirname(os.path.realpath(__file__)) + "/result/to_main.db"
 
     while True: # 全トライアルの処理が終わるまでループ
 
@@ -623,94 +628,59 @@ if __name__ == '__main__':
         r_near = get_value_by_name('r_near')
         r_center = get_value_by_name('r_center')
         r_just = get_value_by_name('r_just')
-        Target = get_value_by_name('Target')
+        distance = get_value_by_name('distance')
+        past_step = get_value_by_name('past_step')
         trials = get_value_by_name('trials')
         trial_size = get_value_by_name('trial_size')
+        start_trial = get_value_by_name('start_trial')
 
-        parameters = ['network', 'conv_num', 'mid_layer_num', 'mid_units1', 'mid_units2', 
-                  'mid_units3', 'cnv_act', 'ful_act', 'optimizer', 'batch_size', 
-                  'r_collision', 'r_near', 'r_center', 'r_just', 'Target', 'trials', 'trial_size']
+        agent = ReinforceAgent()
 
-        agent = ReinforceAgent(network, conv_num, mid_layer_num, mid_units1, mid_units2, 
-                               mid_units3, cnv_act, ful_act, optimizer, batch_size, Target, 
-                               trials)
-
-        env = Env(agent.mode, agent.robot_n, agent.lidar_num, agent.input_list, 
+        env = Env(agent.mode, agent.robot_n, agent.lidar_num, agent.input_lidar, agent.lidar_past_step, 
+                  agent.input_cam, agent.cam_past_step, 
                   agent.teleport, r_collision, r_near, r_center, r_just, 
-                  Target, agent.display_image_normal, agent.display_image_count, 
-                  agent.display_rb)
+                  distance, trials, agent.display_image_normal, 
+                  agent.display_image_count, agent.display_rb, agent.cam_width, agent.cam_height)
+        
+        # テストを行う回数を記録
+        if training and evaluation and agent.all_episode_test:
+            test_num = agent.episode
+        to_optuna = sqlite3.connect(os.path.dirname(os.path.realpath(__file__)) + "/result/to_optuna.db")
+        cursor_to_optuna = to_optuna.cursor()
+        cursor_to_optuna.execute("INSERT INTO to_optuna (process_id, data) VALUES (?, ?)", (999, test_num))
+        to_optuna.commit()
+        to_optuna.close()
 
-        #########記録ファイル作成########################################################
+        # トライアル数の記録
+        data = [[''], [str(trials)]]
+        columns = ['trials']
         if training:
-            # 学習ファイル
-            f_train_file = os.path.dirname(os.path.realpath(__file__)) + '/score/'
-            f_train_name = f_train_file + str(agent.robot_n) + "_follow_3rb_" + str(Target) + "_" + dtstr + "_train.xlsx"
-            # ディレクトリがない場合、作成する
-            if not os.path.exists(f_train_file):
-                os.makedirs(f_train_file)
-            if trials == 0 or trials == agent.trial_restart:
-                columns = ['trials', 'episodes', 'step', 'reward_sum', 'collisions', 'follow', 'color_num', 'time']
-                df = pd.DataFrame(columns=columns)
-                df.to_excel(f_train_name, index=False)
-            # トライアル数を書き込む
-            data = [[''], [str(trials)]]
-            columns = ['trials']
-            agent.excel(data, columns, f_train_name)
+            excel(data, columns, f_train_name)
         if evaluation:
-            # テストファイル
-            f_test_file =  os.path.dirname(os.path.realpath(__file__)) + '/score/'
-            f_test_name = f_test_file + str(agent.robot_n) + "_follow_3rb_" + str(Target) + "_" + dtstr + "_test.xlsx"
-            # ディレクトリがない場合、作成する
-            if not os.path.exists(f_test_file):
-                os.makedirs(f_test_file)
-            if trials == 0 or trials == agent.trial_restart:
-                columns = ['trials', 'episodes', 'step', 'reward_sum', 'collisions', 'follow', 'color_num', 'time']
-                df = pd.DataFrame(columns=columns)
-                df.to_excel(f_test_name, index=False)
-            # トライアル数を書き込む
-            data = [[''], [str(trials)]]
-            columns = ['trials']
-            agent.excel(data, columns, f_test_name)
-
-            # 評価ファイル
-            f_evaluate_file =  os.path.dirname(os.path.realpath(__file__)) + '/score/'
-            f_evaluate_name = f_evaluate_file + str(agent.robot_n) + "_follow_3rb_" + str(Target) + "_" + dtstr + "_evaluate.xlsx"
-            # ディレクトリがない場合、作成する
-            if not os.path.exists(f_evaluate_file):
-                os.makedirs(f_evaluate_file)
-            if trials == 0 or trials == agent.trial_restart:
-                columns = ['trials', 'episodes', 'step_ave', 'collisions_ave', 'follow_ave', 'color_num_ave', 'evaluation']
-                df = pd.DataFrame(columns=columns)
-                df.to_excel(f_evaluate_name, index=False)
-            # トライアル数を書き込む
-            data = [[''], [str(trials)]]
-            columns = ['trials']
-            agent.excel(data, columns, f_evaluate_name)
-        ################################################################################
+            excel(data, columns, f_test_name)
+            excel(data, columns, f_evaluate_name)
         
         #########ロボットの学習・テスト・デモ#################
         if training:
             test_episodes = agent.train() # 学習の実行
-            score_list = [0, 0, 0]
         if evaluation:
             score_list = []
             if 'test_episodes' not in locals():
-                test_episodes = [999 for _ in range(load_test_num)]
+                test_episodes = list(range(1000, 1000 + test_num))
             for test_e in test_episodes:
                 score = agent.evaluate(test_e)  # テストの実行
-                score_list.append(score)
+                score_list.append([score, test_e])
         if demonstration:
             agent.demo() # デモンストレーションの実行
-            score_list = [0, 0, 0]
-        if not training and not evaluation and not demonstration:
-            score_list = [100, 100, 100]
-            print('training/evaluation/demonstration のどれかをTrueにしてください!')
+        if (not training) and (not evaluation) and (not demonstration):
+            print('training, evaluation, demonstration のどれかをTrueにしてください!')
             time.sleep(3)
         #######################################################
-        
-        score_list = score_list[-3:] # 評価リストの後方3つを採用する
 
-        # データベースにあるパラメータ値の削除とsetフラグの解除
+        if 'score_list' not in locals():
+            score_list = list([i, i] for i in range(agent.episode - test_num + 1, agent.episode + 1))
+
+        # データベースにあるOptunaパラメータ値の削除とsetフラグの解除
         cursor_to_main.execute('''
         UPDATE to_main
         SET value = NULL, is_set = 0
@@ -719,12 +689,12 @@ if __name__ == '__main__':
 
         # 結果格納用データベースに結果を格納
         for data in score_list:
-            to_optuna = sqlite3.connect(os.path.dirname(os.path.realpath(__file__)) + "/score/to_optuna.db")
+            to_optuna = sqlite3.connect(os.path.dirname(os.path.realpath(__file__)) + "/result/to_optuna.db")
             cursor_to_optuna = to_optuna.cursor()
-            cursor_to_optuna.execute("INSERT INTO to_optuna (process_id, data) VALUES (?, ?)", (agent.robot_n, data))
+            cursor_to_optuna.execute("INSERT INTO to_optuna (process_id, data, episode) VALUES (?, ?, ?)", (agent.robot_n, data[0], data[1]))
             to_optuna.commit()
             to_optuna.close()
         
         # 最後のトライアルでループを抜ける
-        if trials + 1 == trial_size:
+        if trials + 1 >= trial_size + start_trial:
             break
