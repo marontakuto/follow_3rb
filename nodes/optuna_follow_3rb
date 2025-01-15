@@ -428,20 +428,19 @@ if __name__ == '__main__':
     optuna_db_path = 'sqlite:///' + os.path.dirname(os.path.realpath(__file__)) + '/result/optuna.db' # データベースの保存場所
 
     ### Optunaの設定 ###########
-    trial_size = 30 # 実行するトライアル数
-    save_study = True # Optunaの内容をデータベースに保存
-    load_study = False # 前回のOptunaの内容を引き継ぐ
+    trial_size = 45 # 実行するトライアル数
+    save_study = False # Optunaの内容をデータベースに保存
+    load_study = True # 前回のOptunaの内容を引き継ぐ
     shutdown = True # プログラム終了時にPCの電源を落とすか否か
-    fix = False # 初期トライアルのパラメータ値の固定(study.optimizeの直前でstudy.enqueue_trialを用いて追加してください)
+    fix = False # 初期トライアルのパラメータ値の固定(choice_paramsでパラメータを設定してください)
     choice_param_only = False # 指定したパラメータのみを用いる
     trial_size_choice = 1 # 指定したパラメータでの試行回数(1つの組み合わせあたり)
 
     # 指定するパラメータの設定
     choice_params = [
-        {'conv_num': 3, 'mid_layer_num': 3, 'mid_units1': 315.0, 'mid_units3': 659.0, 'mid_units2': 96.0, 
-         'r_collision': 1890.0, 'r_near_exis': True, 'r_near': 1.9, 'r_center_exis': True, 'r_center': 0.36, 
-         'r_just': 0.36, 
-         'distance_exis': True, 'distance': 0.18, 'past_step': 2}
+        {'conv_num': 2, 'mid_layer_num': 2, 'mid_units1': 710.0, 'mid_units2': 232.0, 'r_collision': 170.0, 
+         'r_near_exis': True, 'r_near': 23.0, 'r_center_exis': True, 'r_center': 69.0, 'r_just': 100.0, 
+         'distance_exis': False, 'past_step': 1}
     ]
     
     """ 上位群の割合を減少させるTPE(initial_gamma: 最初の上位群の割合, 
