@@ -421,10 +421,10 @@ class ReinforceAgent():
         reward_ave = sum(old_score) / len(old_score)
 
         # ロボットの評価値を算出
-        a = 0.8
-        b = 0.2
+        a = 0.9
+        b = 0.1
         if agent.robot_n == 0:
-            score = a * (100 * (1 - collisions)) + b * (100 * step_count / self.test_step)
+            score = a * (100 * step_count / self.test_step) + b * (100 * (1 - collisions))
         elif agent.robot_n != 0:
             score = a * (100 * r_just_count / self.test_step) + b * (100 * (1 - collisions))
         

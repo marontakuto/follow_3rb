@@ -429,8 +429,8 @@ if __name__ == '__main__':
 
     ### Optunaの設定 ###########
     trial_size = 45 # 実行するトライアル数
-    save_study = False # Optunaの内容をデータベースに保存
-    load_study = True # 前回のOptunaの内容を引き継ぐ
+    save_study = True # Optunaの内容をデータベースに保存
+    load_study = False # 前回のOptunaの内容を引き継ぐ
     shutdown = True # プログラム終了時にPCの電源を落とすか否か
     fix = False # 初期トライアルのパラメータ値の固定(choice_paramsでパラメータを設定してください)
     choice_param_only = False # 指定したパラメータのみを用いる
