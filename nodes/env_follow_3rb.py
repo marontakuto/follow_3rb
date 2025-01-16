@@ -286,7 +286,7 @@ class Env():
             if (130 >= robot_blue_num >= 30) or (130 >= robot_green_num >= 30):
                 reward += self.r_just
                 just_count = 1
-            if (robot_green_num or robot_blue_num) > 130:
+            if (robot_blue_num or robot_green_num) > 130:
                 reward -= self.r_near
         
         return reward, color_num, just_count

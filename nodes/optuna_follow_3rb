@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-""" それぞれがDQNを保有する群ロボットの回避行動の獲得 """
+""" それぞれがDQNを保有する群ロボットの追従行動の獲得 """
 
 from __future__ import division
 import rospy
@@ -104,11 +104,11 @@ class Select: # Optunaのパラメータを管理するデータベースを操�
             r_collision = trial.suggest_float("r_collision", 10, 1000, step=10)
         else:
             r_collision = 0
-        if trial.suggest_categorical('r_near_exis', [True, False]):
+        if True: # trial.suggest_categorical('r_near_exis', [True, False])
             r_near = trial.suggest_float("r_near", 1, 100, step=1)
         else:
             r_near = 0
-        if trial.suggest_categorical('r_center_exis', [True, False]):
+        if True: # trial.suggest_categorical('r_center_exis', [True, False])
             r_center = trial.suggest_float("r_center", 1, 100, step=1)
         else:
             r_center = 0
@@ -208,7 +208,7 @@ class DynamicGammaTPE(TPESampler): # 上位群の割合を変動させるTPE
 class VisualOptuna: # Optunaの可視化
     def __init__(self):
         self.to_trial = 10 # 何トライアルごとにグラフを作成するか
-        self.initial_trial = 50 # 何トライアル目からグラフを作成するか
+        self.initial_trial = 40 # 何トライアル目からグラフを作成するか
         self.png = True # 画像として保存するか
         self.html = False # HTMLとして保存するか
 
@@ -428,7 +428,7 @@ if __name__ == '__main__':
     optuna_db_path = 'sqlite:///' + os.path.dirname(os.path.realpath(__file__)) + '/result/optuna.db' # データベースの保存場所
 
     ### Optunaの設定 ###########
-    trial_size = 45 # 実行するトライアル数
+    trial_size = 60 # 実行するトライアル数
     save_study = True # Optunaの内容をデータベースに保存
     load_study = False # 前回のOptunaの内容を引き継ぐ
     shutdown = True # プログラム終了時にPCの電源を落とすか否か
