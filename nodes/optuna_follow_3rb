@@ -18,6 +18,7 @@ from optuna.trial import TrialState
 
 import sqlite3
 import pandas as pd
+import numpy as np
 
 
 class Select: # Optunaのパラメータを管理するデータベースを操作
@@ -208,7 +209,7 @@ class DynamicGammaTPE(TPESampler): # 上位群の割合を変動させるTPE
 class VisualOptuna: # Optunaの可視化
     def __init__(self):
         self.to_trial = 10 # 何トライアルごとにグラフを作成するか
-        self.initial_trial = 40 # 何トライアル目からグラフを作成するか
+        self.initial_trial = 50 # 何トライアル目からグラフを作成するか
         self.png = True # 画像として保存するか
         self.html = False # HTMLとして保存するか
 
@@ -343,6 +344,9 @@ class Recode: # 記録ファイルの操作
         df.to_excel(self.name, index=False)
 
 
+def gamma_set(x: int) -> int:
+    return int(np.ceil(gamma * x))
+
 def main(trial):
 
     # トライアル数を定義(0から始まる)
@@ -384,6 +388,14 @@ def main(trial):
     sql.clear_data() # データベースの初期化
     print('score_list = ' + str(score_max) + ', episode = ' + str(max_episode))
 
+    # 探索時間の算出
+    seconds = int(time.time() - time_optuna)
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    seconds_trial = int(seconds / (trials - start_trial + 1))
+    m_trial, s_trial = divmod(seconds_trial, 60)
+    h_trial, m_trial = divmod(m_trial, 60)
+
     # Optunaの記録
     if trials == 0:
         best_trial_num = 0
@@ -396,7 +408,9 @@ def main(trial):
         "parameter: " + str(study.trials[-1].params) + "\n", 
         "select episode: " + str(max_episode) + "\n", 
         "score: " + str(score_max) + "\n", 
-        "best_trial: " + str(best_trial_num) + "\n\n"
+        "best_trial: " + str(best_trial_num) + "\n", 
+        "time_total: " + str(seconds) + "[s], " + str(h) + ":" + str(m) + ":" + str(s) + "[hour:min:sec]\n", 
+        "time_ave: " + str(seconds_trial) + "[s], " + str(h_trial) + ":" + str(m_trial) + ":" + str(int(s_trial)) + "[hour:min:sec]\n\n"
     ]
     with open(f_optuna_name, 'a') as f: # ファイルにテキストを書き込む
         f.writelines(text)
@@ -428,7 +442,7 @@ if __name__ == '__main__':
     optuna_db_path = 'sqlite:///' + os.path.dirname(os.path.realpath(__file__)) + '/result/optuna.db' # データベースの保存場所
 
     ### Optunaの設定 ###########
-    trial_size = 60 # 実行するトライアル数
+    trial_size = 65 # 実行するトライアル数
     save_study = True # Optunaの内容をデータベースに保存
     load_study = False # 前回のOptunaの内容を引き継ぐ
     shutdown = True # プログラム終了時にPCの電源を落とすか否か
@@ -446,6 +460,8 @@ if __name__ == '__main__':
     """ 上位群の割合を減少させるTPE(initial_gamma: 最初の上位群の割合, 
         final_gamma: 減少後の上位群の割合, stop_trial: 割合減少を止めるトライアル, random_trials: ランダムサーチのトライアル数) """
     sampler = DynamicGammaTPE(initial_gamma=0.7, final_gamma=0.1, stop_trial=50, random_trials=10)
+    gamma = 0.1 # TPESamplerの上位群の割合
+    # sampler = TPESampler(gamma=gamma_set, n_startup_trials=10)
     ############################
     
     if choice_param_only:
