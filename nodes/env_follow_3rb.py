@@ -753,11 +753,11 @@ class Env():
         bad_action = []
 
         # 方向の定義
-        forward_deg = 40 # 正面とする角度の定義[deg]
+        front_deg = 40 # 正面とする角度の定義[deg]
         lidar_deg = 360 // lidar_num # 1要素間の角度[deg]
-        forward = list(range(0, (forward_deg // 2) // lidar_deg + 1)) # LiDARの正面とする要素番号
-        left = list(range((forward_deg // 2) // lidar_deg + 1, lidar_num // 4 + 1)) # LiDARの前方左側
-        right = list(range(lidar_num * 3 // 4, lidar_num - ((forward_deg // 2) // lidar_deg))) # LiDARの前方右側
+        front = list(range(0, (front_deg // 2) // lidar_deg + 1)) + list(range(lidar_num - ((front_deg // 2) // lidar_deg), lidar_num)) # LiDARの正面とする要素番号
+        left = list(range((front_deg // 2) // lidar_deg + 1, lidar_num // 4 + 1)) # LiDARの前方左側
+        right = list(range(lidar_num * 3 // 4, lidar_num - ((front_deg // 2) // lidar_deg))) # LiDARの前方右側
 
         # LiDARのリストで条件に合う要素を格納したリストをインスタンス化(element_num:要素番号, element_cont:要素内容)
         low_lidar = [element_num for element_num, element_cont in enumerate(self.scan) if element_cont <= threshold]
@@ -767,7 +767,7 @@ class Env():
             bad_action.append(0)
             if action == 0:
                 change_action = True
-        if set(forward) & set(low_lidar) != set():
+        if set(front) & set(low_lidar) != set():
             bad_action.append(1)
             if action == 1 or action == 3:
                 change_action = True
