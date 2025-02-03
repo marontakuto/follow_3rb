@@ -43,7 +43,7 @@ class ReinforceAgent():
         self.cam_height = 27 # カメラ画像の縦[pixel]
         
         self.exploration = 'd_egreedy' # d_egreedy(decay_epsilon_greedy) or c_egreedy(constant_epsilon_greedy)
-        self.lidar_num = 72 # DQNに入力するlidarの方向数(MAX: 360)
+        self.lidar_num = 36 # DQNに入力するlidarの方向数(MAX: 360)
         self.action_size = 4 # 行動の種類数
         self.episode = 40 # 40
         self.eval_episode = 4 # 4

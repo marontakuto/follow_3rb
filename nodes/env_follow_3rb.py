@@ -133,6 +133,7 @@ class Env():
                     else:
                        img = rospy.wait_for_message('usb_cam/image_raw/compressed', CompressedImage, timeout=1) # 実機用(圧縮データ)
                 except:
+                    self.stop()
                     pass
             
             if self.mode == 'sim':
@@ -143,9 +144,6 @@ class Env():
                 img = cv2.imdecode(img, cv2.IMREAD_COLOR) # カラー画像(BGR)
             
             img = cv2.resize(img, (self.cam_width, self.cam_height)) # 取得した画像をcam_width×cam_height[pixel]に変更
-
-            if self.display_image_normal and self.robot_n in self.display_rb:
-                self.display_image(img, f'camera_normal_{self.robot_n}')
             
             self.img = img
 
@@ -205,6 +203,16 @@ class Env():
 
         ### 画像の取得と処理 ###
         img = self.get_camera() # カメラ画像の取得
+        if 'img_past' in locals():
+            while True: # 画像が1step前と同じ場合は画像を取得し続ける
+                if np.array_equal(np.array(img), img_past):
+                    self.stop()
+                    img = self.get_camera()
+                else:
+                    break
+        img_past = np.array(img) # このstepの画像を保存
+        if self.display_image_normal and self.robot_n in self.display_rb:
+            self.display_image(img, f'camera_normal_{self.robot_n}')
         
         #### LiDAR情報の取得と処理 ###
         scan = self.get_lidar() # LiDAR値の取得
@@ -283,10 +291,15 @@ class Env():
         elif self.robot_n != 0: # robot1, 2
             if abs(lidar_value_left - lidar_value_right) <= 0.04:
                 reward += self.r_center
-            if (130 >= robot_blue_num >= 30) or (130 >= robot_green_num >= 30):
+            if (10 <= robot_blue_num <= 60) or (10 <= robot_green_num <= 60):
                 reward += self.r_just
                 just_count = 1
-            if (robot_blue_num or robot_green_num) > 130:
+            #     if self.robot_n in self.display_rb:
+            #         print(f"\033[31m{robot_blue_num}, {robot_green_num}\033[0m")
+            # else:
+            #     if self.robot_n in self.display_rb:
+            #         print(robot_blue_num, robot_green_num)
+            if (robot_blue_num or robot_green_num) > 60:
                 reward -= self.r_near
         
         return reward, color_num, just_count
