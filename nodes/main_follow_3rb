@@ -57,7 +57,7 @@ class ReinforceAgent():
 
         ### 自ら作成した変数 ###
         self.display_image_normal = False # 加工していない画像の表示
-        self.display_image_count = False # マスク処理した画像の表示
+        self.display_image_count = False # 範囲指定した画像の表示
         self.display_rb = [2] # カメラ画像を出力するロボットの識別番号
         self.screen_list = [2] # 学習経過を出力するロボットの識別番号
         self.recovery = True # リカバリー方策を適用するか否か
@@ -92,29 +92,16 @@ class ReinforceAgent():
         # ネットワークへの入力数の定義
         self.n_added_input = 0
         if self.input_cam: # カメラ画像
-            if network in ['CNN', 'DCNN']:
-                self.n_input_channels = 3 * (self.cam_past_step + 1)
-            elif network == 'MLP':
-                self.n_input = (self.cam_width * self.cam_height * 3) * (self.cam_past_step + 1)
+            self.n_input_channels = 3 * (self.cam_past_step + 1)
         if self.input_lidar: # LiDAR
             self.n_added_input = self.lidar_num * (self.lidar_past_step + 1)
         
         # ネットワークモデルを定義
-        if network == 'CNN':
-            self.q_func = net_follow_3rb.Q_Func_Optuna(
-                conv_num, mid_layer_num, mid_units1, mid_units2,mid_units3,cnv_act,ful_act,
-                n_actions=self.action_size, n_input_channels=self.n_input_channels, 
-                n_added_input=self.n_added_input, img_width=self.cam_width, img_height=self.cam_height)
-        elif network == 'DCNN':
-            self.q_func = net_follow_3rb.Dueling_Q_Func_Optuna(
-                conv_num, mid_layer_num, mid_units1, mid_units2, mid_units3, cnv_act, ful_act,
-                n_actions=self.action_size, n_input_channels=self.n_input_channels, 
-                n_added_input=self.n_added_input, img_width=self.cam_width, img_height=self.cam_height
-            )
-        elif network == 'MLP':
-            self.q_func = net_follow_3rb.MLP_Optuna(
-                mid_layer_num, mid_units1, mid_units2, mid_units3, ful_act, 
-                n_actions=self.action_size, n_input=self.n_input, n_added_input=self.n_added_input)
+        self.q_func = net_follow_3rb.Dueling_Q_Func_Optuna(
+            conv_pool, mid_layer_num, mid_units1, mid_units2, mid_units3, cnv_act, ful_act,
+            n_actions=self.action_size, n_input_channels=self.n_input_channels, 
+            n_added_input=self.n_added_input, img_width=self.cam_width, img_height=self.cam_height
+        )
 
         # 最適化アルゴリズムの設定
         if optimizer == 'SGD':
@@ -211,12 +198,14 @@ class ReinforceAgent():
                 ##### shielding(リカバリー方策) #####
                 if self.recovery and t >= 2:
                     action = env.recovery_change_action(e, self.lidar_num, action, state, self.model.model) # LiDARの数値が低い方向への行動を避ける
+                    self.model.batch_last_action[0] = action # リプレイバッファに保存する行動を変更
                 #####################################
 
                 next_state, reward, color_num, just_count, collision = env.step(action, test=False) # 行動、状態の観測、報酬の一連の処理
                 next_state = torch.from_numpy(next_state).float()
-                self.model.observe(next_state, reward, collision, reset=False) # モデルの更新
-
+                # ターゲット更新、モデル更新・同期、リプレイバッファ保存(pfrl.agent.BatchAgent.observeを経由してpfrl.agents.DoubleDQN.batch_observeへ)
+                self.model.observe(next_state, reward, collision, reset=False)
+                
                 r_just_count += just_count
                 color_count += color_num
                 score += reward
@@ -614,8 +603,7 @@ if __name__ == '__main__':
             time.sleep(0.1)
 
         # 変数にデータを格納
-        network = get_value_by_name('network')
-        conv_num = get_value_by_name('conv_num')
+        conv_pool = get_value_by_name('conv_pool')
         mid_layer_num = get_value_by_name('mid_layer_num')
         mid_units1 = get_value_by_name('mid_units1')
         mid_units2 = get_value_by_name('mid_units2')

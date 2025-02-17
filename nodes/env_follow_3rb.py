@@ -44,12 +44,18 @@ class Env():
         self.pub_cmd_vel = rospy.Publisher('cmd_vel', Twist, queue_size=5)
         self.reset_proxy = rospy.ServiceProxy('gazebo/reset_simulation', Empty)
 
+        if self.mode=='sim':
+            self.sub_img=rospy.Subscriber('usb_cam/image_raw',Image,self.pass_img,queue_size=10) #これがないと上手く画像取得できない(原因不明) 実機はなし
+        else:
+            self.sub_img=rospy.Subscriber('usb_cam/image_raw/compressed',CompressedImage,self.pass_img,queue_size=10) #これがないと上手く画像取得できない(原因不明) 実機用
+
         # カメラ画像
         self.display_image_normal = display_image_normal
         self.display_image_count = display_image_count
         self.display_rb = display_rb
         self.cam_width = cam_width
         self.cam_height = cam_height
+        self.collision_img_past = False
 
         # Optunaで選択された値
         self.r_collision = r_collision
@@ -63,6 +69,9 @@ class Env():
         self.lidar_max = 2 # 対象のworldにおいて取りうるlidarの最大値(simの貫通対策や正規化に使用)
         self.lidar_min = 0.12 # lidarの最小測距値[m]
         self.range_margin = self.lidar_min + 0.02 # 衝突として処理される距離[m] 0.02
+
+    def pass_img(self, img):#画像正常取得用callback
+        pass
 
     def get_clock(self):
         if self.mode == 'sim':
@@ -91,6 +100,7 @@ class Env():
                 try:
                     scan = rospy.wait_for_message('scan', LaserScan, timeout=1) # LiDAR値の取得(1deg刻み360方向の距離情報を取得)
                 except:
+                    self.stop()
                     pass
             
             data_range = [] # 取得したLiDAR値を修正して格納するリスト
@@ -128,20 +138,20 @@ class Env():
             img = None
             while img is None:
                 try:
-                    if self.mode == 'sim':
-                       img = rospy.wait_for_message('usb_cam/image_raw', Image, timeout=1) # シミュレーション用(生データ)
+                    if self.mode=='sim':
+                       img = rospy.wait_for_message('usb_cam/image_raw', Image, timeout=1) # 非圧縮データ(シミュレーションで圧縮データを扱うと学習性能が落ちる)
                     else:
-                       img = rospy.wait_for_message('usb_cam/image_raw/compressed', CompressedImage, timeout=1) # 実機用(圧縮データ)
+                       img = rospy.wait_for_message('usb_cam/image_raw/compressed', CompressedImage, timeout=1) # 圧縮データ
                 except:
                     self.stop()
                     pass
-            
-            if self.mode == 'sim':
-                img = ros_numpy.numpify(img)
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # カラー画像(BGR)
+
+            if self.mode=='sim':
+                img = ros_numpy.numpify(img) # RGB
             else:
-                img = np.frombuffer(img.data, np.uint8)
-                img = cv2.imdecode(img, cv2.IMREAD_COLOR) # カラー画像(BGR)
+                img = np.frombuffer(img.data, np.uint8) # データ参照
+                img = cv2.imdecode(img, cv2.IMREAD_COLOR) # BGR
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # RGB
             
             img = cv2.resize(img, (self.cam_width, self.cam_height)) # 取得した画像をcam_width×cam_height[pixel]に変更
             
@@ -176,7 +186,7 @@ class Env():
             img = np.hstack((img[:, :len(img[1])*1//5], img[:, len(img[1])*4//5:]))
         
         # 画像をHSV色空間に変換
-        img_hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        img_hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
 
         # マスク処理
         outside = cv2.inRange(img_hsv, outside_lower, outside_upper)
@@ -192,13 +202,15 @@ class Env():
 
         # 注目領域の出力
         if self.display_image_count and self.robot_n in self.display_rb:
-            self.display_image(img, f'camera_count_{self.robot_n}')
+            self.display_image(img, f'camera_count_{self.robot_n}_{scope}')
         
         return outside_num, inside_num, robot_blue_num, robot_green_num
     
     def getState(self): # 情報取得
 
         collision = False
+        collision_img = False
+        collision_lidar = False
         state_list = [] # 入力する情報を格納するリスト
 
         ### 画像の取得と処理 ###
@@ -211,18 +223,31 @@ class Env():
                 else:
                     break
         img_past = np.array(img) # このstepの画像を保存
+
         if self.display_image_normal and self.robot_n in self.display_rb:
             self.display_image(img, f'camera_normal_{self.robot_n}')
+        
+        _, _, robot_blue_num, robot_green_num = self.get_count(img, scope='all')
+        if 500 <= robot_blue_num or 500 <= robot_green_num: # 画像の衝突判定
+            collision_img = True
+            if self.collision_img_past:
+                collision_img = False
+            self.collision_img_past = True
+        else:
+            self.collision_img_past = False
         
         #### LiDAR情報の取得と処理 ###
         scan = self.get_lidar() # LiDAR値の取得
 
         if self.range_margin >= min(scan):
-            collision = True
+            collision_lidar = True
             if self.mode == 'real': # 実機実験におけるLiDARの飛び値の処理
                 scan_true = [element_cont for element_num, element_cont in enumerate(scan) if element_cont != 0]
                 if scan.count(0) >= 1 and self.range_margin < min(scan_true): # (飛び値が存在する)and(飛び値を除いた場合は衝突判定ではない)
-                    collision = False
+                    collision_lidar = False
+        
+        # 衝突判定
+        collision = collision_img or collision_lidar
         
         # 入力するカメラ画像の処理
         if self.input_cam:
@@ -291,7 +316,7 @@ class Env():
         elif self.robot_n != 0: # robot1, 2
             if abs(lidar_value_left - lidar_value_right) <= 0.04:
                 reward += self.r_center
-            if (10 <= robot_blue_num <= 60) or (10 <= robot_green_num <= 60):
+            if (30 <= robot_blue_num <= 130) or (30 <= robot_green_num <= 130):
                 reward += self.r_just
                 just_count = 1
             #     if self.robot_n in self.display_rb:
@@ -299,7 +324,7 @@ class Env():
             # else:
             #     if self.robot_n in self.display_rb:
             #         print(robot_blue_num, robot_green_num)
-            if (robot_blue_num or robot_green_num) > 60:
+            if robot_green_num > 130 or robot_blue_num > 130:
                 reward -= self.r_near
         
         return reward, color_num, just_count
@@ -616,6 +641,8 @@ class Env():
         self.path = []
 
     def display_image(self, img, name): # カメラ画像の出力
+
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
         # アスペクト比を維持してリサイズ
         magnification = 10 # 出力倍率

@@ -25,7 +25,7 @@ class Select: # Optunaのパラメータを管理するデータベースを操�
     def __init__(self):
         # データベースで扱う変数名
         self.parameters = [
-            'network', 'conv_num', 'mid_layer_num', 'mid_units1', 'mid_units2', 
+            'conv_pool', 'mid_layer_num', 'mid_units1', 'mid_units2', 
             'mid_units3', 'cnv_act', 'ful_act', 'optimizer', 'batch_size', 
             'r_collision', 'r_near', 'r_center', 'r_just', 
             'distance', 'past_step', 'trials', 'trial_size', 'start_trial'
@@ -64,11 +64,8 @@ class Select: # Optunaのパラメータを管理するデータベースを操�
 
     def choice_param(self, trial, trials, trial_size, start_trial): # Optunaのパラメータ選択
 
-        network = 'DCNN' # CNN or DCNN or MLP
-        
-        if network in ['CNN', 'DCNN']:
-            #畳み込み層,プーリング層の組み合わせを選択
-            conv_num = trial.suggest_categorical('conv_num', [1, 2, 3])
+        #畳み込み層,プーリング層の組み合わせを選択
+        conv_pool = trial.suggest_categorical('conv_pool', [1, 2, 3, 4])
 
         # 中間層数とユニット数の選択
         mid_layer_num = trial.suggest_categorical('mid_layer_num', [1, 2, 3])
@@ -78,17 +75,16 @@ class Select: # Optunaのパラメータを管理するデータベースを操�
             mid_units3 = None
         elif mid_layer_num == 2:
             mid_units1 = int(trial.suggest_float("mid_units1", 300, 800, step=1))
-            mid_units2 = int(trial.suggest_float("mid_units2", 50, 500, step=1))
+            mid_units2 = int(trial.suggest_float("mid_units2", 50, 400, step=1))
             mid_units3 = None
         elif mid_layer_num == 3:
             mid_units1 = int(trial.suggest_float("mid_units1", 300, 800, step=1))
             mid_units3 = int(trial.suggest_float("mid_units3", 300, 800, step=1))
-            mid_units2 = int(trial.suggest_float("mid_units2", 50, 500, step=1))
+            mid_units2 = int(trial.suggest_float("mid_units2", 50, 400, step=1))
 
         # fully-connected layerとconvolutionの活性化関数の選択
-        if network in ['CNN', 'DCNN']:
-            # cnv_act_name = trial.suggest_categorical('activation_cnv', ['F.relu', 'F.elu', 'F.selu', 'F.l_relu'])
-            cnv_act = 'F.relu'
+        # cnv_act_name = trial.suggest_categorical('activation_cnv', ['F.relu', 'F.elu', 'F.selu', 'F.l_relu'])
+        cnv_act = 'F.relu'
         # ful_act_name = trial.suggest_categorical('activation_ful', ['F.relu', 'F.elu', 'F.selu', 'F.l_relu'])
         ful_act = 'F.relu'
 
@@ -120,7 +116,7 @@ class Select: # Optunaのパラメータを管理するデータベースを操�
         
         # リカバリー方策のしきい値(距離[m])
         if trial.suggest_categorical('distance_exis', [True, False]):
-            distance = trial.suggest_float("distance", 0.16, 0.2, step=0.001)
+            distance = trial.suggest_float("distance", 0.16, 0.2, step=0.01)
         else:
             distance = 0.0
         
@@ -209,7 +205,7 @@ class DynamicGammaTPE(TPESampler): # 上位群の割合を変動させるTPE
 class VisualOptuna: # Optunaの可視化
     def __init__(self):
         self.to_trial = 10 # 何トライアルごとにグラフを作成するか
-        self.initial_trial = 50 # 何トライアル目からグラフを作成するか
+        self.initial_trial = 30 # 何トライアル目からグラフを作成するか
         self.png = True # 画像として保存するか
         self.html = False # HTMLとして保存するか
 
@@ -442,7 +438,7 @@ if __name__ == '__main__':
     optuna_db_path = 'sqlite:///' + os.path.dirname(os.path.realpath(__file__)) + '/result/optuna.db' # データベースの保存場所
 
     ### Optunaの設定 ###########
-    trial_size = 40 # 実行するトライアル数
+    trial_size = 30 # 実行するトライアル数
     save_study = True # Optunaの内容をデータベースに保存
     load_study = False # 前回のOptunaの内容を引き継ぐ
     shutdown = True # プログラム終了時にPCの電源を落とすか否か
@@ -452,7 +448,7 @@ if __name__ == '__main__':
 
     # 指定するパラメータの設定
     choice_params = [
-        {'conv_num': 3, 'mid_layer_num': 1, 'mid_units1': 580.0, 'r_collision': 1000.0, 
+        {'conv_pool': 3, 'mid_layer_num': 1, 'mid_units1': 580.0, 'r_collision': 1000.0, 
          'r_near': 10.0, 'r_center': 10.0, 'r_just': 100.0, 
          'distance_exis': 0.0, 'past_step': 2}
     ]
