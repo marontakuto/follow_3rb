@@ -29,7 +29,6 @@ class ReinforceAgent():
 
         ########変更パラメータ#################################################################
         self.mode = 'sim' # sim or real
-        self.choice_model = False # dirPath/load_model/robot_n でテスト
 
         self.save_rbuf = False # リプレイバッファを保存するか(モデルは必ず保存されます)
         self.load_model = False # 保存した重みを適用するか
@@ -64,22 +63,6 @@ class ReinforceAgent():
         self.teleport = True # 衝突時は空いたスペースに再配置するか否か
         self.all_episode_test = False # すべてのエピソードをテスト
         self.robot_coordinate_recode = False # テストでのロボットの座標の記録
-
-        # ### オプション有無の実験 ###
-        # if trials >= 9:
-        #     self.action_size = 6
-        #     self.recovery = True
-        # elif trials >= 6:
-        #     self.action_size = 4
-        #     self.recovery = True
-        # elif trials >= 3:
-        #     self.action_size = 5
-        #     self.recovery = True
-        # else:
-        #     self.action_size = 6
-        #     self.recovery = True
-        # ############################
-
         #######################################################################################
 
         # ロボットの番号割振り(launchファイルの「<param name="robot_num"  value="ここ"/>」から値を参照)
@@ -248,7 +231,7 @@ class ReinforceAgent():
             self.model.save(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(e) + '/robot_' + str(self.robot_n)) # モデルの保存
             
             # エピソードごとの同期(他ロボットが右のエリアにいることを確認することで同期を取る)
-            if e != self.episode:
+            if e != self.episode and self.mode == 'sim':
                 env.set_robot(102) # フィールド外の右側に配置
                 sync = False
                 while sync == False:
@@ -383,7 +366,7 @@ class ReinforceAgent():
                         color_list.append(color_count)
                         step_list.append(t)
 
-                        if self.robot_coordinate_recode:
+                        if self.robot_coordinate_recode and self.mode == 'sim':
                             flag_last = False
                             if eval_e == self.eval_episode:
                                 flag_last = True
@@ -540,7 +523,7 @@ if __name__ == '__main__':
     training = True # 学習の有無
     evaluation = True # テストの有無(ここだけTrueにしたら自動的にロードしたモデルでテストになります)
     demonstration = False # デモンストレーションの有無
-    test_num = 3 # テストする回数(training, evaluation, agent.all_episode_test が True の場合は agent.episode が定義されます)
+    test_num = 4 # テストする回数(training, evaluation, agent.all_episode_test が True の場合は agent.episode が定義されます)
     ####################################
 
     # 実験開始時間の取得

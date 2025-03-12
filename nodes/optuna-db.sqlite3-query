@@ -8,11 +8,11 @@ PRAGMA foreign_keys = OFF;
 
 BEGIN TRANSACTION;
 
-DELETE FROM trial_params WHERE trial_id >= 71;
-DELETE FROM trial_values WHERE trial_id >= 71;
-DELETE FROM trial_user_attributes WHERE trial_id >= 71;
-DELETE FROM trial_system_attributes WHERE trial_id >= 71;
-DELETE FROM trials WHERE trial_id >= 71;
+DELETE FROM trial_params WHERE trial_id >= 31;
+DELETE FROM trial_values WHERE trial_id >= 31;
+DELETE FROM trial_user_attributes WHERE trial_id >= 31;
+DELETE FROM trial_system_attributes WHERE trial_id >= 31;
+DELETE FROM trials WHERE trial_id >= 31;
 
 COMMIT;
 

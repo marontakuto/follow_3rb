@@ -438,7 +438,7 @@ if __name__ == '__main__':
     optuna_db_path = 'sqlite:///' + os.path.dirname(os.path.realpath(__file__)) + '/result/optuna.db' # データベースの保存場所
 
     ### Optunaの設定 ###########
-    trial_size = 30 # 実行するトライアル数
+    trial_size = 40 # 実行するトライアル数
     save_study = True # Optunaの内容をデータベースに保存
     load_study = False # 前回のOptunaの内容を引き継ぐ
     shutdown = True # プログラム終了時にPCの電源を落とすか否か
@@ -448,9 +448,8 @@ if __name__ == '__main__':
 
     # 指定するパラメータの設定
     choice_params = [
-        {'conv_pool': 3, 'mid_layer_num': 1, 'mid_units1': 580.0, 'r_collision': 1000.0, 
-         'r_near': 10.0, 'r_center': 10.0, 'r_just': 100.0, 
-         'distance_exis': 0.0, 'past_step': 2}
+        {'conv_pool': 1, 'mid_layer_num': 2, 'mid_units1': 782.0, 'mid_units2': 253.0, 'r_collision': 1000.0, 
+        'r_near': 11.0, 'r_center': 57.0, 'r_just': 440.0, 'distance_exis': False, 'past_step': 1}
     ]
     
     """ 上位群の割合を減少させるTPE(initial_gamma: 最初の上位群の割合, 
@@ -518,6 +517,9 @@ if __name__ == '__main__':
     # ベストパラメータ・スコアの表示
     print(f"\nbest_params={study.best_params}")
     print(f"\nbest_value={study.best_value}\n")
+
+    # 最後のグラフ作成
+    visual.create_graph_single(start_trial + trial_size - 1)
     
     # ROSログファイルの削除(ROSの通信遅延を解消できる)
     os.system('rosclean purge -y')
@@ -525,4 +527,3 @@ if __name__ == '__main__':
     # PCのシャットダウン
     if shutdown:
         os.system('shutdown -P +1')
-    

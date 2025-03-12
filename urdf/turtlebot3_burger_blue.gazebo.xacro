@@ -190,6 +190,6 @@
       </plugin>
     </sensor>
   </gazebo>
-  <xacro:include filename="$(find turtlebot3_dqn)/goal_3rb/urdf/camera_macro.xacro"/>
+  <xacro:include filename="$(find turtlebot3_dqn)/follow_3rb/urdf/camera_macro.xacro"/>
   <xacro:camera_macro prefix="usb_cam" parent="base_link" xyz="0.06 0.0 0.08"/>
 </robot>

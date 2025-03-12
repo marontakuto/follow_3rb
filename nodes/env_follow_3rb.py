@@ -363,11 +363,13 @@ class Env():
         state_list, collision = self.getState() # 状態観測
         reward, color_num, just_count = self.setReward(collision, action) # 報酬計算
 
-        if not test: # テスト時でないときの処理
-            if collision and not self.teleport:
+        if collision and not test:
+            if self.mode == 'real' or not self.teleport:
                 self.restart() # 進行方向への向き直し
-            elif collision:
+            else:
                 self.relocation() # 空いているエリアへの再配置
+        elif collision and test:
+            self.stop()
         
         return np.array(state_list), reward, color_num, just_count, collision
 
@@ -442,6 +444,7 @@ class Env():
                     img = self.get_camera(retake=True)
                     _, inside_num, _, _ = self.get_count(img, scope='middle')
                     while inside_num < 15:
+                        self.pub_cmd_vel.publish(vel_cmd)
                         img = self.get_camera(retake=True)
                         _, inside_num, _, _ = self.get_count(img, scope='middle')
 
@@ -472,6 +475,7 @@ class Env():
                     img = self.get_camera(retake=True)
                     _, inside_num, _, _ = self.get_count(img, scope='right')
                     while inside_num < 10:
+                        self.pub_cmd_vel.publish(vel_cmd)
                         img = self.get_camera(retake=True)
                         _, inside_num, _, _ = self.get_count(img, scope='right')
                     break
@@ -501,46 +505,50 @@ class Env():
         g = [0.0, 1.45, 0.02, 0.0]    # 左
         h = [0.55, 1.45, 0.02, -1.57] # 左上
 
+        test_first = [0.2, 0.35, 0.02, 3.14] # 右
+        test_second = [0.55, 0.9, 0.02, -2.355] # 上
+        test_third = [0.55, 1.45, 0.02, -1.57] # 左上
+
         if num == 0: # 初期位置
             if self.robot_n == 0:
-                XYZyaw = c
+                XYZyaw = test_first
             elif self.robot_n == 1:
-                XYZyaw = a
+                XYZyaw = test_second
             elif self.robot_n == 2:
-                XYZyaw = g
+                XYZyaw = test_third
         
         # 以下テスト用
         if num in [1, 2]:
             if self.robot_n == 0:
-                XYZyaw = c
+                XYZyaw = test_first
             elif self.robot_n == 1:
-                XYZyaw = a
+                XYZyaw = test_second
             elif self.robot_n == 2:
-                XYZyaw = g
+                XYZyaw = test_third
         
         elif num in [3, 4]:
             if self.robot_n == 0:
-                XYZyaw = c
+                XYZyaw = test_first
             elif self.robot_n == 1:
-                XYZyaw = g
+                XYZyaw = test_third
             elif self.robot_n == 2:
-                XYZyaw = a
+                XYZyaw = test_second
         
         elif num in [5, 6]:
             if self.robot_n == 0:
-                XYZyaw = b
+                XYZyaw = test_first
             elif self.robot_n == 1:
-                XYZyaw = h
+                XYZyaw = test_second
             elif self.robot_n == 2:
-                XYZyaw = f
+                XYZyaw = test_third
         
         elif num in [7, 8]:
             if self.robot_n == 0:
-                XYZyaw = b
+                XYZyaw = test_first
             elif self.robot_n == 1:
-                XYZyaw = f
+                XYZyaw = test_third
             elif self.robot_n == 2:
-                XYZyaw = h
+                XYZyaw = test_second
         
         # フィールド外
         elif num == 102: # フィールド外の右側
