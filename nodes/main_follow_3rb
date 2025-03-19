@@ -286,7 +286,7 @@ class ReinforceAgent():
         if test_e >= 1000: # 指定されたモデルのロード
             self.model.load(self.dirPath + '/load_model/robot_' + str(self.robot_n))
         else: # 学習の内指定されたエピソードのロード
-            self.model.load(self.dirPath + '/TRIALq' + str(trials) + '/episode' + str(test_e) + '/robot_' + str(self.robot_n))
+            self.model.load(self.dirPath + '/TRIAL' + str(trials) + '/episode' + str(test_e) + '/robot_' + str(self.robot_n))
 
         with self.model.eval_mode():
             for eval_e in range(1, self.eval_episode + 1):
