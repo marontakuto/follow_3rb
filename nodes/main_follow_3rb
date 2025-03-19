@@ -278,7 +278,7 @@ class ReinforceAgent():
         color_list = []
         step_list = []
 
-        if self.robot_coordinate_recode:
+        if self.robot_coordinate_recode and self.mode == 'sim':
             env.coordinate_file()
 
         start_time = time.time()
@@ -336,7 +336,7 @@ class ReinforceAgent():
                     elif self.mode == 'sim': # 他ロボットが右のエリアにいることを確認することで同期を取る
                         done = env.area_judge(terms='soft', area='upper')
                     
-                    if self.robot_coordinate_recode:
+                    if self.robot_coordinate_recode and self.mode == 'sim':
                         env.coordinate_get()
                     
                     if done:
